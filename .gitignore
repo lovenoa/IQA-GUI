@@ -1,0 +1,28 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+iqa_gui_runtime.log
+
+# Upstream cloned repo
+IQA-PyTorch/
+
+# Temporary artifacts & test images
+*.png
+!iqa_gui/resources/*.png
+*.jpg
+*.jpeg
+*.bmp
+
+# OS / Editor specific
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
