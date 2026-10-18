@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 from PySide6.QtCore import QObject, QThread, Signal
 
 from iqa_gui.core.evaluator import EvaluatorEngine, SingleEvalResult
@@ -338,9 +338,9 @@ class SafePackageInstallerWorker(QThread):
         ]
 
         logger = LogManager.get_instance()
-        logger._append_to_buffer(f"\n[安全组件安装] 执行受控安装: {' '.join(cmd)}\n")
-        logger._append_to_buffer("[安全组件安装] 严格保护核心环境，禁止覆盖升级现有 PyTorch/CUDA 驱动...\n")
-        self.progress.emit(f"开始安全安装组件: {', '.join(self.packages)}")
+        logger._append_to_buffer(f"\n[组件安装] 执行安装: {' '.join(cmd)}\n")
+        logger._append_to_buffer("[组件安装] 保留现有 PyTorch 与 CUDA 运行环境...\n")
+        self.progress.emit(f"开始安装组件: {', '.join(self.packages)}")
 
         try:
             # Check cuda availability before
@@ -386,7 +386,7 @@ class SafePackageInstallerWorker(QThread):
                 except Exception:
                     pass
 
-                self.finished.emit(True, f"组件 {', '.join(self.packages)} 安装成功！")
+                self.finished.emit(True, f"组件 {', '.join(self.packages)} 安装成功。")
             else:
                 self.finished.emit(False, f"组件安装失败，返回码: {self._process.returncode}。请查看后台日志获取详细信息。")
         except Exception as e:

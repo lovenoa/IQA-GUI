@@ -332,14 +332,14 @@ def test_multi_image_compare_dialog():
 
     dlg = MultiImageCompareDialog([SAMPLE_DIST, SAMPLE_REF], eval_map)
     assert dlg.table_compare.rowCount() == 1
-    # Check winner column has trophy and points to Image 2 (higher PSNR)
+    # Check winner column points to Image 2 (higher PSNR)
     winner_item = dlg.table_compare.item(0, 5)
-    assert "🏆 图 2 优胜" in winner_item.text()
+    assert "图 2 优胜" in winner_item.text()
 
     # Test clipboard copy method
     copy_text = dlg._copy_to_clipboard()
     assert "psnr" in copy_text.lower()
-    assert "🏆 图 2 优胜" in copy_text
+    assert "图 2 优胜" in copy_text
 
     # Test CSV export
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
@@ -378,8 +378,8 @@ def test_multi_image_compare_dialog_three_images():
     # Check winner column has both winner (Image 2) and loser (Image 3)
     col_winner_idx = 3 + 3
     winner_item = dlg.table_compare.item(0, col_winner_idx)
-    assert "🏆 图 2 优胜" in winner_item.text()
-    assert "📉 图 3 垫底" in winner_item.text()
+    assert "图 2 优胜" in winner_item.text()
+    assert "图 3 垫底" in winner_item.text()
 
 
 def test_multi_round_summary_dialog_single_and_multi():
@@ -418,7 +418,7 @@ def test_multi_round_summary_dialog_single_and_multi():
     assert dlg_multi.tab_widget.count() == 2
     assert dlg_multi.table_multi_summary.rowCount() == 1
     # Check winner column in summary
-    assert "🏆 图 1" in dlg_multi.table_multi_summary.item(0, 9).text()
+    assert "图 1" in dlg_multi.table_multi_summary.item(0, 9).text()
 
 
 def test_single_view_multi_round_gui():

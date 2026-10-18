@@ -285,13 +285,13 @@ class SingleEvalView(QWidget):
             self.viewer_ref.lbl_title.setText("基准参考图像 (Reference - 包含全参考算法，需提供原图)")
             self.viewer_ref.setEnabled(True)
             self.viewer_ref.show()
-            self.tabs_view.setTabText(0, "🔍 双图联动同步比对 (Side-by-Side)")
+            self.tabs_view.setTabText(0, "双图比对")
             self.tabs_view.setTabEnabled(1, True)
         else:
             self.viewer_ref.lbl_title.setText("基准参考图像 (已选算法均为无参考NR，无需原图)")
             self.viewer_ref.setEnabled(False)
             self.viewer_ref.hide()
-            self.tabs_view.setTabText(0, "🖼️ 单图无参考深度画布 (Target)")
+            self.tabs_view.setTabText(0, "图像预览")
             self.tabs_view.setTabEnabled(1, False)
 
     def _on_target_image_changed(self, target_path: str) -> None:
@@ -333,7 +333,7 @@ class SingleEvalView(QWidget):
         if evaluated_count >= 2:
             self.btn_open_compare.show()
             self.btn_open_compare.setEnabled(True)
-            self.btn_open_compare.setText(f"📊 打开多图横向比对报表 ({evaluated_count} 张图片 PK)")
+            self.btn_open_compare.setText(f"打开多图比对报表 ({evaluated_count} 张图片)")
         else:
             self.btn_open_compare.hide()
             self.btn_open_compare.setEnabled(False)
@@ -521,9 +521,9 @@ class SingleEvalView(QWidget):
 
         if total > 0:
             self.table_scorecard.selectRow(0)
-            overall_text = "🌟 综合评级：S 级 (卓越画质，光影美学与细节表现极佳)" if s_count >= 2 else (
-                "✨ 综合评级：A 级 (优质水准，细节良好，无明显结构瑕疵)" if (s_count + a_count) >= 2 else
-                "👌 综合评级：B 级 (整体合格，建议关注局部微小噪点或模糊)"
+            overall_text = "综合评级：S 级 (细节与画质表现良好)" if s_count >= 2 else (
+                "综合评级：A 级 (水准良好，无明显瑕疵)" if (s_count + a_count) >= 2 else
+                "综合评级：B 级 (整体合格，建议关注局部微小噪点或模糊)"
             )
             first_res = self.latest_results[0]
             info = self.model_manager.get_model(first_res.metric_name)
@@ -589,7 +589,7 @@ class SingleEvalView(QWidget):
         # Prepare UI
         rounds = self.spin_rounds.value() if self.chk_multi_round.isChecked() else 1
         self.btn_run.setEnabled(False)
-        self.btn_run.setText("⏳ 正在计算中...")
+        self.btn_run.setText("正在计算...")
         total_evals = rounds * len(target_paths) * len(selected)
         round_hint = f"共 {rounds} 轮, " if rounds > 1 else ""
         self.lbl_eval_status.setText(f"正在计算 ({round_hint}1/{total_evals}) ...")
@@ -645,7 +645,7 @@ class SingleEvalView(QWidget):
         if evaluated_count >= 2:
             self.btn_open_compare.show()
             self.btn_open_compare.setEnabled(True)
-            self.btn_open_compare.setText(f"打开多图对比报表 ({evaluated_count} 张图片 PK)")
+            self.btn_open_compare.setText(f"打开多图比对报表 ({evaluated_count} 张图片)")
         else:
             self.btn_open_compare.hide()
             self.btn_open_compare.setEnabled(False)
@@ -713,7 +713,7 @@ class SingleEvalView(QWidget):
         msg_box.setIcon(QMessageBox.Icon.Critical)
         msg_box.setWindowTitle("评估失败")
         msg_box.setText(f"计算图像质量时发生错误:\n{err_msg}\n\n您可以点击下方按钮打开后台日志监视器查看具体工作与排查信息。")
-        btn_open_log = msg_box.addButton("📋 打开后台运行日志", QMessageBox.ButtonRole.ActionRole)
+        btn_open_log = msg_box.addButton("查看日志", QMessageBox.ButtonRole.ActionRole)
         msg_box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
         msg_box.exec()
 

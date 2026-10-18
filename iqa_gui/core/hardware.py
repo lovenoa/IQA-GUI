@@ -61,19 +61,19 @@ def detect_hardware() -> HardwareInfo:
         effective_device = "cuda"
         cuda_name = torch.cuda.get_device_name(0) if torch.cuda.device_count() > 0 else (gpu_name or "CUDA GPU")
         status_summary = f"CUDA GPU 加速已就绪: {cuda_name}"
-        recommendation_zh = "您的独立显卡硬件加速已完美激活，所有画质评估算法将全速在 GPU 上运算。"
+        recommendation_zh = "GPU 硬件加速已就绪，画质评估算法将优先在 GPU 上运算。"
     elif has_nvidia_gpu:
         effective_device = "cpu"
         status_summary = f"检测到独显: {gpu_name} (当前为 CPU 运行模式)"
         recommendation_zh = (
-            f"系统已检测到高性能独立显卡【{gpu_name} ({vram_mb or 8192}MB 显存)】，"
-            f"但当前运行的 PyTorch 版本为【{torch_ver} (仅CPU构建)】，未包含 CUDA 核心。\n"
-            "建议：若需开启 10~50 倍的独显极速推理，请在支持 CUDA 的 Python (如 3.11 或 3.12) 环境下运行。"
+            f"检测到独立显卡【{gpu_name} ({vram_mb or 8192}MB 显存)】，"
+            f"但当前运行的 PyTorch 版本为【{torch_ver} (CPU构建)】，未包含 CUDA 支持。\n"
+            "建议：如需使用 GPU 加速，请在安装了 CUDA 支持的 PyTorch 环境中运行。"
         )
     else:
         effective_device = "cpu"
-        status_summary = "CPU 处理器运算模式"
-        recommendation_zh = "未检测到可用的 NVIDIA 独立显卡，当前使用多核心 CPU 处理器平稳运行。"
+        status_summary = "CPU 运算模式"
+        recommendation_zh = "未检测到可用的 NVIDIA 独立显卡，当前使用 CPU 运行。"
 
     return HardwareInfo(
         has_nvidia_gpu=has_nvidia_gpu,

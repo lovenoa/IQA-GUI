@@ -68,7 +68,7 @@ class ModelZooView(QWidget):
         self.lbl_cache_summary.setProperty("class", "MutedText")
         self.lbl_cache_summary.setStyleSheet("font-weight: 600;")
 
-        self.btn_preload_popular = QPushButton("⬇ 预载常用深度算法权重 (LPIPS/BRISQUE/MUSIQ)")
+        self.btn_preload_popular = QPushButton("预载常用算法权重 (LPIPS/BRISQUE/MUSIQ)")
         self.btn_preload_popular.clicked.connect(self._preload_popular)
 
         set_layout.addWidget(self.chk_mirror)
@@ -89,7 +89,7 @@ class ModelZooView(QWidget):
         # Filter row
         filter_row = QHBoxLayout()
         self.edit_search = QLineEdit()
-        self.edit_search.setPlaceholderText("🔍 搜索算法名称、缩写或中文描述...")
+        self.edit_search.setPlaceholderText("搜索算法名称、缩写或中文描述...")
         self.edit_search.textChanged.connect(self.refresh_catalog)
         self.edit_search.setClearButtonEnabled(True)
 
@@ -136,11 +136,11 @@ class ModelZooView(QWidget):
         self.txt_desc = QTextEdit()
         self.txt_desc.setReadOnly(True)
 
-        self.btn_download_single = QPushButton("⬇ 立即下载/加载此模型权重")
+        self.btn_download_single = QPushButton("下载/加载此模型权重")
         self.btn_download_single.clicked.connect(self._download_selected)
         self.btn_download_single.setEnabled(False)
 
-        self.btn_install_dep = QPushButton("📦 安全一键安装所需组件")
+        self.btn_install_dep = QPushButton("一键安装所需组件")
         self.btn_install_dep.clicked.connect(self._install_selected_deps)
         self.btn_install_dep.setVisible(False)
 
@@ -318,7 +318,7 @@ class ModelZooView(QWidget):
         self.btn_download_single.setEnabled(True)
         self.refresh_catalog()
 
-        msg = f"权重载入完成！成功: {len(succeeded)} 个"
+        msg = f"权重载入完成。成功: {len(succeeded)} 个"
         if failed:
             msg += f"，失败: {len(failed)} 个 ({', '.join(f[0] for f in failed)})"
         QMessageBox.information(self, "模型权重更新", msg)

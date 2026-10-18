@@ -47,11 +47,11 @@ class ResultsTableWidget(QFrame):
         self.lbl_count = QLabel("共 0 项")
         self.lbl_count.setProperty("class", "MutedText")
 
-        self.btn_export_csv = QPushButton("📊 导出为 CSV 报表")
+        self.btn_export_csv = QPushButton("导出为 CSV 报表")
         self.btn_export_csv.clicked.connect(self._export_csv)
         self.btn_export_csv.setEnabled(False)
 
-        self.btn_export_json = QPushButton("💾 导出为 JSON")
+        self.btn_export_json = QPushButton("导出为 JSON")
         self.btn_export_json.clicked.connect(self._export_json)
         self.btn_export_json.setEnabled(False)
 

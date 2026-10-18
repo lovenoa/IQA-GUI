@@ -248,7 +248,7 @@ def test_variable_metrics_diagnostic_warning():
         time_seconds=0.1,
         target_path=SAMPLE_DIST,
     )
-    assert "易浮动" in res_qalign.grade_desc
+    assert "可能浮动" in res_qalign.grade_desc
 
 
 def test_multi_round_single_eval_worker():

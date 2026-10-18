@@ -59,7 +59,7 @@ class MultiImageCompareDialog(QDialog):
         h_layout.setSpacing(6)
 
         title_row = QHBoxLayout()
-        self.lbl_title = QLabel("<b>多图画质横向综合比对看板 (Image Quality PK Benchmark)</b>")
+        self.lbl_title = QLabel("<b>多图画质横向比对看板</b>")
         self.lbl_title.setStyleSheet("font-size: 15px;")
         title_row.addWidget(self.lbl_title)
         title_row.addStretch()
@@ -97,7 +97,7 @@ class MultiImageCompareDialog(QDialog):
         # Columns: Metric, Mode, Direction, Image 1, Image 2, [Image 3], Winner, Applicability
         base_cols = ["指标名称", "模式", "倾向"]
         img_cols = [f"图 {i+1}: {os.path.basename(p)}" for i, p in enumerate(self.image_paths)]
-        end_cols = ["🏆 胜出图片 (PK结果)", "💡 算法适用性与比对建议"]
+        end_cols = ["胜出图片", "比对说明"]
         self.col_headers = base_cols + img_cols + end_cols
 
         self.table_compare = QTableWidget(self)
@@ -110,10 +110,10 @@ class MultiImageCompareDialog(QDialog):
 
         # Footer Actions
         footer_layout = QHBoxLayout()
-        self.btn_copy = QPushButton("📋 复制对比数据至剪贴板")
+        self.btn_copy = QPushButton("复制对比数据")
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
 
-        self.btn_export = QPushButton("💾 导出为 CSV 报表...")
+        self.btn_export = QPushButton("导出为 CSV 报表...")
         self.btn_export.clicked.connect(self._export_to_csv)
 
         self.btn_close = QPushButton("关闭")
@@ -233,11 +233,11 @@ class MultiImageCompareDialog(QDialog):
             # Col: Winner (and Loser if >= 3 images)
             win_col_idx = 3 + num_imgs
             if is_tie:
-                item_win = QTableWidgetItem("🤝 平局")
+                item_win = QTableWidgetItem("平局")
             elif best_idx is not None:
-                win_text = f"🏆 图 {best_idx + 1} 优胜"
+                win_text = f"图 {best_idx + 1} 优胜"
                 if num_imgs >= 3 and worst_idx is not None:
-                    win_text += f" | 📉 图 {worst_idx + 1} 垫底"
+                    win_text += f" | 图 {worst_idx + 1} 垫底"
                 item_win = QTableWidgetItem(win_text)
                 item_win.setForeground(QColor(39, 174, 96))
                 font = item_win.font()
@@ -253,9 +253,9 @@ class MultiImageCompareDialog(QDialog):
             advice = self._get_metric_comparison_advice(m_name, mode)
             item_advice = QTableWidgetItem(advice)
             item_advice.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            if "⚠️" in advice:
+            if "仅衡量" in advice or "不适用" in advice:
                 item_advice.setForeground(QColor(225, 29, 72))
-            elif "💡" in advice:
+            elif "全参考" in advice:
                 item_advice.setForeground(QColor(217, 119, 6))
             else:
                 item_advice.setForeground(QColor(16, 185, 129))
@@ -273,18 +273,18 @@ class MultiImageCompareDialog(QDialog):
                 summary_parts.append(f"图 {i+1} 胜出 <b>{w_cnt}</b> 项 (垫底 <b>{l_cnt}</b> 项)")
             else:
                 summary_parts.append(f"图 {i+1} 胜出 <b>{w_cnt}</b> 项")
-        self.lbl_summary_bar.setText(f"🥇 PK 战况统计: {' | '.join(summary_parts)}")
+        self.lbl_summary_bar.setText(f"比对统计: {' | '.join(summary_parts)}")
 
     def _get_metric_comparison_advice(self, metric_name: str, mode: str) -> str:
         """Provide suitability analysis and precautions for multi-image comparison."""
         m = metric_name.lower()
         if m == "clipscore":
-            return "⚠️ 提示词契合度指标: 仅衡量图像与Prompt的语义契合度。若待测图片主题内容不一致，横向对比绝对数值无参考意义。"
+            return "提示词契合度指标: 仅衡量图像与 Prompt 的语义契合度。若待测图片主题内容不一致，横向对比数值无参考意义。"
         if mode == "FR":
-            return "💡 全参考对比前提: 仅当待测图均来源于【同一张原图】(如同一原图的不同压缩/超分版本) 时，横向对比才完全客观有效。"
+            return "全参考指标: 仅当待测图均来源于同一张原图 (如不同压缩/超分版本) 时，横向比对有效。"
         if m in {"fid", "sfid", "fid_dinov2", "inception_score"}:
-            return "⚠️ 分布度量指标: 不适用于单张/少样本对比。"
-        return "✅ 适用横向比对: 属于通用无参考画质指标，分值可直接横向比对画面品质优劣。"
+            return "分布度量指标: 不适用于单张或少样本对比。"
+        return "通用无参考画质指标: 数值可直接横向比对。"
 
     def _copy_to_clipboard(self) -> str:
         """Copy table data to clipboard in TSV and Markdown format."""
@@ -303,7 +303,7 @@ class MultiImageCompareDialog(QDialog):
             cb = QApplication.clipboard()
             if cb is not None:
                 cb.setText(text)
-            QMessageBox.information(self, "复制成功", "已将多图横向比对数据复制到剪贴板！可直接粘贴至 Excel 或表格软件中。")
+            QMessageBox.information(self, "复制成功", "已将多图横向比对数据复制到剪贴板。")
         return text
 
     def _export_to_csv(self) -> None:

@@ -38,7 +38,7 @@ class TaskProgressWidget(QFrame):
         self.lbl_eta = QLabel("")
         self.lbl_eta.setProperty("class", "MutedText")
 
-        self.btn_cancel = QPushButton("⏹ 停止计算")
+        self.btn_cancel = QPushButton("停止计算")
         self.btn_cancel.setProperty("class", "DangerButton")
         self.btn_cancel.clicked.connect(self.cancel_requested.emit)
         self.btn_cancel.setEnabled(False)
@@ -84,7 +84,7 @@ class TaskProgressWidget(QFrame):
             eta_str = f"{mins}分{secs}秒" if mins > 0 else f"{secs}秒"
             self.lbl_eta.setText(f"速度: {speed:.1f} 图/秒 | 预估剩余: {eta_str}")
         elif current >= total:
-            self.lbl_eta.setText("✅ 已完成")
+            self.lbl_eta.setText("已完成")
 
     def reset(self) -> None:
         """Reset progress bar to initial state."""

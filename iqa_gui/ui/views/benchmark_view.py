@@ -109,7 +109,7 @@ class BenchmarkView(QWidget):
         grid.addWidget(self.btn_browse_csv, 2, 2)
 
         # Run Button
-        self.btn_run = QPushButton("📊 开始基准评测并计算相关系数")
+        self.btn_run = QPushButton("开始基准评测并计算相关系数")
         self.btn_run.setProperty("class", "PrimaryButton")
         self.btn_run.setMinimumHeight(36)
         self.btn_run.clicked.connect(self.run_benchmark)
@@ -143,7 +143,7 @@ class BenchmarkView(QWidget):
 
         tbl_header = QHBoxLayout()
         lbl_tbl_title = QLabel("<b>学术评测排行榜 (Benchmark Scorecard)</b>")
-        self.btn_export = QPushButton("📋 导出排行榜 CSV")
+        self.btn_export = QPushButton("导出排行榜 CSV")
         self.btn_export.clicked.connect(self._export_scorecard)
         self.btn_export.setEnabled(False)
 
@@ -209,7 +209,7 @@ class BenchmarkView(QWidget):
             return
 
         self.btn_run.setEnabled(False)
-        self.btn_run.setText("⏳ 正在进行基准测评...")
+        self.btn_run.setText("正在进行基准评测...")
         self.lbl_status.setText("正在逐项提取图像特征并进行主观拟合相关性计算...")
 
         self.active_worker = BenchmarkWorker(
@@ -227,9 +227,9 @@ class BenchmarkView(QWidget):
     def _on_benchmark_finished(self, res: BenchmarkResult) -> None:
         self.last_result = res
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("📊 开始基准评测并计算相关系数")
+        self.btn_run.setText("开始基准评测并计算相关系数")
         self.btn_export.setEnabled(True)
-        self.lbl_status.setText(f"✅ 基准评测已完成！共测试 {len(res.metrics_scores)} 个算法，测试集包含 {res.num_samples} 张图像。")
+        self.lbl_status.setText(f"基准评测已完成。共测试 {len(res.metrics_scores)} 个算法，测试集包含 {res.num_samples} 张图像。")
 
         # Fill table
         self.table.setRowCount(len(res.metrics_scores))

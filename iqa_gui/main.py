@@ -49,18 +49,21 @@ def main() -> int:
         sys.modules["icecream"] = mod
 
     # Safe fallback shim for pkg_resources (used by clip)
-    try:
-        import pkg_resources
-    except ImportError:
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
         try:
-            import types
-            import packaging
-            import packaging.version
-            mod = types.ModuleType("pkg_resources")
-            mod.packaging = packaging
-            sys.modules["pkg_resources"] = mod
-        except Exception:
-            pass
+            import pkg_resources
+        except ImportError:
+            try:
+                import types
+                import packaging
+                import packaging.version
+                mod = types.ModuleType("pkg_resources")
+                mod.packaging = packaging
+                sys.modules["pkg_resources"] = mod
+            except Exception:
+                pass
 
     from iqa_gui.core.evaluator import patch_mplug_owl_compatibility
     patch_mplug_owl_compatibility()

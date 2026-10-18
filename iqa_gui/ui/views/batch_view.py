@@ -94,7 +94,7 @@ class BatchEvalView(QWidget):
 
         # Run buttons
         btn_layout = QHBoxLayout()
-        self.btn_start = QPushButton("▶ 开始批量评估")
+        self.btn_start = QPushButton("开始批量评估")
         self.btn_start.setProperty("class", "PrimaryButton")
         self.btn_start.setMinimumHeight(36)
         self.btn_start.clicked.connect(self.start_batch)
@@ -197,11 +197,11 @@ class BatchEvalView(QWidget):
         self.progress_widget.update_progress(current, total, status_msg=msg, speed=speed)
 
     def _on_batch_finished(self, summary: BatchSummary) -> None:
-        self.progress_widget.set_running(False, f"✅ 批量评估完成！共处理 {summary.completed_images} 项，耗时 {summary.total_time_seconds:.1f} 秒")
+        self.progress_widget.set_running(False, f"批量评估完成。共处理 {summary.completed_images} 项，耗时 {summary.total_time_seconds:.1f} 秒")
         self.results_table.set_summary(summary)
         self.btn_start.setEnabled(True)
 
     def _on_batch_error(self, err_msg: str) -> None:
-        self.progress_widget.set_running(False, f"❌ 评估异常终止: {err_msg}")
+        self.progress_widget.set_running(False, f"评估异常终止: {err_msg}")
         self.btn_start.setEnabled(True)
         QMessageBox.critical(self, "批量评估出错", f"批处理过程中遇到错误:\n{err_msg}")

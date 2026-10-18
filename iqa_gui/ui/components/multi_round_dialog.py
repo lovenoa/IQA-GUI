@@ -42,7 +42,7 @@ class MultiRoundSummaryDialog(QDialog):
         self.rounds_eval_map = rounds_eval_map
         self.total_rounds = len(rounds_eval_map)
 
-        self.setWindowTitle("📈 多轮测试统计聚合与稳定性分析报表")
+        self.setWindowTitle("多轮测试统计聚合报表")
         self.resize(1150, 700)
         self.setMinimumSize(900, 520)
 
@@ -62,7 +62,7 @@ class MultiRoundSummaryDialog(QDialog):
         h_layout.setSpacing(4)
 
         top_row = QHBoxLayout()
-        self.lbl_title = QLabel("<b>多轮重复测试聚合统计与算法稳定性诊断 (Multi-Round Stability Benchmark)</b>")
+        self.lbl_title = QLabel("<b>多轮重复测试聚合统计与稳定性诊断</b>")
         self.lbl_title.setStyleSheet("font-size: 15px;")
         top_row.addWidget(self.lbl_title)
         top_row.addStretch()
@@ -73,7 +73,7 @@ class MultiRoundSummaryDialog(QDialog):
         h_layout.addLayout(top_row)
 
         desc_text = (
-            "💡 说明: 对深度学习算法进行多轮次独立推断，可检验算法是否受量化误差、随机采样或数值截断影响。"
+            "说明: 多轮测试可检验算法在重复推断时的稳定性。"
             "统计值包含：变动极差 (Max - Min)、样本标准差 (σ) 以及平均值 (Mean μ)。"
         )
         self.lbl_sub = QLabel(desc_text)
@@ -100,7 +100,7 @@ class MultiRoundSummaryDialog(QDialog):
             self.table_multi_summary = QTableWidget(tab_summary)
             self._setup_multi_image_summary_table()
             tab_sum_layout.addWidget(self.table_multi_summary)
-            self.tab_widget.addTab(tab_summary, "📊 多图平均值 PK 与稳定性比较")
+            self.tab_widget.addTab(tab_summary, "多图平均值与稳定性比对")
 
             tab_details = QWidget()
             tab_det_layout = QVBoxLayout(tab_details)
@@ -108,7 +108,7 @@ class MultiRoundSummaryDialog(QDialog):
             self.table_multi_details = QTableWidget(tab_details)
             self._setup_multi_image_details_table()
             tab_det_layout.addWidget(self.table_multi_details)
-            self.tab_widget.addTab(tab_details, "📋 逐轮全部详细明细表 (全部排出)")
+            self.tab_widget.addTab(tab_details, "逐轮明细表")
 
             layout.addWidget(self.tab_widget, 1)
             self.tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -116,10 +116,10 @@ class MultiRoundSummaryDialog(QDialog):
 
         # Footer Actions
         footer_layout = QHBoxLayout()
-        self.btn_copy = QPushButton("📋 复制当前表格至剪贴板")
+        self.btn_copy = QPushButton("复制当前表格")
         self.btn_copy.clicked.connect(self._copy_to_clipboard)
 
-        self.btn_export = QPushButton("💾 导出为 CSV 报表...")
+        self.btn_export = QPushButton("导出为 CSV 报表...")
         self.btn_export.clicked.connect(self._export_to_csv)
 
         self.btn_close = QPushButton("关闭")
@@ -207,13 +207,13 @@ class MultiRoundSummaryDialog(QDialog):
 
             # Diagnosis text
             if range_val < 1e-5:
-                diag = "✅ 绝对确定性 (完全一致，无波动)"
+                diag = "绝对确定性 (完全一致，无波动)"
                 color = QColor(16, 185, 129)
             elif range_val < 0.02:
-                diag = f"👌 微幅数值扰动 (极差={range_val:.4f})"
+                diag = f"微幅数值扰动 (极差={range_val:.4f})"
                 color = QColor(59, 130, 246)
             else:
-                diag = f"⚠️ 存在浮动变化 (极差={range_val:.4f}, σ={std_val:.4f})"
+                diag = f"可能浮动 (极差={range_val:.4f}, σ={std_val:.4f})"
                 color = QColor(225, 29, 72)
 
             item_diag = QTableWidgetItem(diag)
@@ -238,7 +238,7 @@ class MultiRoundSummaryDialog(QDialog):
             cols.append(f"图 {idx+1} 极差")
             cols.append(f"图 {idx+1} 标准差 (σ)")
 
-        cols.extend(["🏆 平均值 PK 胜出者", "各图稳定性综合评价"])
+        cols.extend(["平均值胜出者", "稳定性评价"])
 
         self.table_multi_summary.setColumnCount(len(cols))
         self.table_multi_summary.setHorizontalHeaderLabels(cols)
@@ -337,14 +337,14 @@ class MultiRoundSummaryDialog(QDialog):
             # Col: Mean PK Winner
             col_winner = 3 + num_imgs * 3
             if best_idx is not None:
-                w_text = f"🏆 图 {best_idx + 1} (均值: {means[best_idx]:.4f})"
+                w_text = f"图 {best_idx + 1} (均值: {means[best_idx]:.4f})"
                 if num_imgs >= 3 and worst_idx is not None:
-                    w_text += f" | 📉 图 {worst_idx + 1} 垫底"
+                    w_text += f" | 图 {worst_idx + 1} 垫底"
                 item_w = QTableWidgetItem(w_text)
                 item_w.setForeground(QColor(39, 174, 96))
                 item_w.setFont(QFont("", -1, QFont.Weight.Bold))
             else:
-                item_w = QTableWidgetItem("🤝 均值平局")
+                item_w = QTableWidgetItem("均值平局")
             item_w.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_multi_summary.setItem(row_idx, col_winner, item_w)
 
@@ -352,13 +352,13 @@ class MultiRoundSummaryDialog(QDialog):
             col_eval = col_winner + 1
             max_r = max(ranges) if ranges else 0.0
             if max_r < 1e-5:
-                eval_text = "✅ 各图结果绝对一致"
+                eval_text = "各图结果一致"
                 eval_color = QColor(16, 185, 129)
             elif max_r < 0.02:
-                eval_text = f"👌 极小幅微动 (最大极差={max_r:.4f})"
+                eval_text = f"微幅数值扰动 (最大极差={max_r:.4f})"
                 eval_color = QColor(59, 130, 246)
             else:
-                eval_text = f"⚠️ 各图均存在小幅波动 (最大极差={max_r:.4f})"
+                eval_text = f"可能浮动 (最大极差={max_r:.4f})"
                 eval_color = QColor(225, 29, 72)
             item_eval = QTableWidgetItem(eval_text)
             item_eval.setForeground(eval_color)
@@ -440,11 +440,11 @@ class MultiRoundSummaryDialog(QDialog):
 
                 winner_col = 4 + len(self.image_paths)
                 if best_idx is not None:
-                    w_item = QTableWidgetItem(f"🏆 图 {best_idx + 1}")
+                    w_item = QTableWidgetItem(f"图 {best_idx + 1}")
                     w_item.setForeground(QColor(39, 174, 96))
                     w_item.setFont(QFont("", -1, QFont.Weight.Bold))
                 else:
-                    w_item = QTableWidgetItem("🤝 平局")
+                    w_item = QTableWidgetItem("平局")
                 w_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table_multi_details.setItem(current_row, winner_col, w_item)
 
@@ -477,7 +477,7 @@ class MultiRoundSummaryDialog(QDialog):
             cb = QApplication.clipboard()
             if cb is not None:
                 cb.setText(text)
-            QMessageBox.information(self, "复制成功", "已将多轮测试统计聚合数据复制到剪贴板！可直接粘贴至 Excel 中。")
+            QMessageBox.information(self, "复制成功", "已将多轮测试统计聚合数据复制到剪贴板。")
         return text
 
     def _export_to_csv(self) -> None:

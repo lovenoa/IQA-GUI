@@ -176,7 +176,7 @@ class ImageViewerCard(QFrame):
         self.pill_bar_layout.addWidget(self.pills_container)
         self.pill_bar_layout.addStretch()
 
-        self.btn_clear_all = QPushButton("🗑️ 清空待测列表")
+        self.btn_clear_all = QPushButton("清空待测列表")
         self.btn_clear_all.setToolTip("清空当前所有待测图片")
         self.btn_clear_all.clicked.connect(self.clear_all_images)
         self.pill_bar_layout.addWidget(self.btn_clear_all)
@@ -372,7 +372,7 @@ class ImageViewerCard(QFrame):
 
         if not self.image_paths:
             self.btn_clear_all.hide()
-            hint = QLabel("💡 待测区支持拖入任意多张图像进行横向对比PK")
+            hint = QLabel("可拖入多张图像进行横向对比")
             hint.setProperty("class", "MutedText")
             hint.setStyleSheet("font-size: 11px;")
             self.pills_layout.addWidget(hint)
@@ -423,7 +423,7 @@ class ImageViewerCard(QFrame):
             self.pills_layout.addWidget(pill_frame)
 
         # Add image button
-        btn_add = QPushButton(f"➕ 添加第 {len(self.image_paths)+1} 张图")
+        btn_add = QPushButton(f"+ 添加第 {len(self.image_paths)+1} 张图")
         btn_add.setToolTip("选择或直接拖入新图片至待测框")
         btn_add.setStyleSheet("font-size: 11px; padding: 2px 8px;")
         btn_add.clicked.connect(self._on_browse_clicked)

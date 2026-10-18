@@ -20,19 +20,22 @@ except ImportError:
     sys.modules["icecream"] = mod
 
 # Safe fallback shim for pkg_resources (used by clip)
-try:
-    import pkg_resources
-except ImportError:
+import warnings
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
     try:
-        import sys
-        import types
-        import packaging
-        import packaging.version
-        mod = types.ModuleType("pkg_resources")
-        mod.packaging = packaging
-        sys.modules["pkg_resources"] = mod
-    except Exception:
-        pass
+        import pkg_resources
+    except ImportError:
+        try:
+            import sys
+            import types
+            import packaging
+            import packaging.version
+            mod = types.ModuleType("pkg_resources")
+            mod.packaging = packaging
+            sys.modules["pkg_resources"] = mod
+        except Exception:
+            pass
 
 try:
     import pyiqa
@@ -226,7 +229,7 @@ def calculate_grade(
 
     # Concise indicator for variable metrics
     if is_variable_metric(m):
-        desc = f"{desc} (易浮动)"
+        desc = f"{desc} (可能浮动)"
 
     return tier, desc
 
@@ -372,8 +375,8 @@ class EvaluatorEngine:
         if metric_name.lower() in distribution_metrics:
             raise ValueError(
                 f"算法 '{metric_name}' 属于生成模型集合分布度量算法 (FID / Inception Score)，"
-                f"需要对整个图片文件夹与基准数据集进行宏观特征统计，不支持单张图片评估。\n"
-                f"如需使用，请前往【📁 文件夹多图批量评测】或【📈 数据集学术基准测试】模块中使用。"
+                f"需要对整个图片文件夹与基准数据集进行特征统计，不支持单张图片评估。\n"
+                f"如需使用，请前往【文件夹批量评测】或【基准性能评测】模块中使用。"
             )
 
         metric = self.get_or_create_metric(metric_name)

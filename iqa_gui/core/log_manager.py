@@ -19,7 +19,7 @@ class LogStreamEmitter(QObject):
 
 
 class StreamTee(io.TextIOBase):
-    """Tee stdout/stderr to both original stream and Qt emitter."""
+    """Tee stdout/stderr to both original stream, Qt emitter, and persistent log file."""
 
     def __init__(self, original_stream, emitter: LogStreamEmitter, prefix: str = ""):
         super().__init__()
@@ -27,36 +27,47 @@ class StreamTee(io.TextIOBase):
         self.emitter = emitter
         self.prefix = prefix
         self._lock = threading.Lock()
+        self._file = None
+        try:
+            self._file = open(LOG_FILE_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
+        except Exception:
+            pass
 
     def write(self, s: str) -> int:
         if not s:
             return 0
-        try:
-            self.original_stream.write(s)
-            self.original_stream.flush()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self.original_stream.write(s)
+                self.original_stream.flush()
+            except Exception:
+                pass
 
-        try:
-            # Emit to Qt log viewer
-            self.emitter.log_received.emit(s)
-        except Exception:
-            pass
+            try:
+                self.emitter.log_received.emit(s)
+            except Exception:
+                pass
 
-        # Also append to log file
-        try:
-            with open(LOG_FILE_PATH, "a", encoding="utf-8", errors="replace") as f:
-                f.write(s)
-        except Exception:
-            pass
+            if self._file:
+                try:
+                    self._file.write(s)
+                    self._file.flush()
+                except Exception:
+                    pass
 
         return len(s)
 
     def flush(self) -> None:
-        try:
-            self.original_stream.flush()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                self.original_stream.flush()
+            except Exception:
+                pass
+            if self._file:
+                try:
+                    self._file.flush()
+                except Exception:
+                    pass
 
 
 class QtLoggingHandler(logging.Handler):
@@ -70,8 +81,6 @@ class QtLoggingHandler(logging.Handler):
         try:
             msg = self.format(record) + "\n"
             self.emitter.log_received.emit(msg)
-            with open(LOG_FILE_PATH, "a", encoding="utf-8", errors="replace") as f:
-                f.write(msg)
         except Exception:
             pass
 

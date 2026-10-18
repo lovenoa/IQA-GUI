@@ -111,7 +111,7 @@ class GMADView(QWidget):
         self.spin_tol.setValue(0.10)
         self.spin_tol.setToolTip("标准化分差在此阈值内即视为两图质量平手/相等")
 
-        self.btn_run = QPushButton("⚡ 开始 gMAD 对抗分析")
+        self.btn_run = QPushButton("开始 gMAD 对抗分析")
         self.btn_run.setProperty("class", "PrimaryButton")
         self.btn_run.setMinimumHeight(34)
         self.btn_run.clicked.connect(self.start_gmad)
@@ -207,7 +207,7 @@ class GMADView(QWidget):
         tol = self.spin_tol.value()
 
         self.btn_run.setEnabled(False)
-        self.btn_run.setText("⏳ 正在打擂比对中...")
+        self.btn_run.setText("正在进行对抗比对...")
         self.lbl_status.setText("正在执行候选池全量打分与标准化...")
 
         self.active_worker = GMADWorker(
@@ -224,8 +224,8 @@ class GMADView(QWidget):
 
     def _on_gmad_finished(self, res: GMADResult) -> None:
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("⚡ 开始 gMAD 对抗分析")
-        self.lbl_status.setText(f"✅ 对抗分析完成！共检索 {res.total_images} 张候选图像。")
+        self.btn_run.setText("开始 gMAD 对抗分析")
+        self.lbl_status.setText(f"对抗分析完成。共检索 {res.total_images} 张候选图像。")
 
         # Update Pair A
         if res.pair_a_tie:
@@ -257,6 +257,6 @@ class GMADView(QWidget):
 
     def _on_gmad_error(self, err_msg: str) -> None:
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("⚡ 开始 gMAD 对抗分析")
-        self.lbl_status.setText(f"❌ 运行失败: {err_msg}")
+        self.btn_run.setText("开始 gMAD 对抗分析")
+        self.lbl_status.setText(f"运行失败: {err_msg}")
         QMessageBox.critical(self, "gMAD 运算失败", f"分析失败:\n{err_msg}")

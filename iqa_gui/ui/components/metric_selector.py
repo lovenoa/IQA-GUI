@@ -82,11 +82,11 @@ class MetricSelectorWidget(QFrame):
         self._populate_presets_combo()
         self.combo_presets.currentIndexChanged.connect(self._on_preset_combo_changed)
 
-        self.btn_save_preset = QPushButton("💾 另存组合")
+        self.btn_save_preset = QPushButton("另存组合")
         self.btn_save_preset.setToolTip("将当前勾选的算法组合保存为新的快捷预设")
         self.btn_save_preset.clicked.connect(self._save_current_as_preset)
 
-        self.btn_manage_preset = QPushButton("⚙ 管理")
+        self.btn_manage_preset = QPushButton("管理")
         self.btn_manage_preset.setToolTip("覆盖更新当前组合或删除自定义组合")
         self.btn_manage_preset.clicked.connect(self._show_preset_manage_menu)
 
@@ -113,7 +113,7 @@ class MetricSelectorWidget(QFrame):
         filter_layout.setSpacing(4)
 
         self.edit_search = QLineEdit()
-        self.edit_search.setPlaceholderText("🔍 快速过滤 (如 aes, clip, musiq, ssim)...")
+        self.edit_search.setPlaceholderText("快速过滤 (如 aes, clip, musiq, ssim)...")
         self.edit_search.textChanged.connect(self.apply_filter)
         self.edit_search.setClearButtonEnabled(True)
 
@@ -205,7 +205,7 @@ class MetricSelectorWidget(QFrame):
 
             if not dep_status.is_ready:
                 missing_str = ",".join(dep_status.missing_required)
-                item_text = f"⚠️ {info.name:<16} [{badge_dir} {info.mode}]  {display_title} (缺{missing_str})"
+                item_text = f"[缺依赖] {info.name:<14} [{badge_dir} {info.mode}]  {display_title} (缺{missing_str})"
             else:
                 item_text = f"{info.name:<18} [{badge_dir} {info.mode}]  {display_title}"
 
@@ -222,9 +222,9 @@ class MetricSelectorWidget(QFrame):
                 f"{info.description_zh}"
             )
             if not dep_status.is_ready:
-                tooltip += f"\n\n⚠️ 运行依赖未就绪: 缺少必要包 {', '.join(dep_status.missing_required)}。点击可查看安全安装引导。"
+                tooltip += f"\n\n运行依赖未就绪: 缺少必要包 {', '.join(dep_status.missing_required)}。点击可查看安装引导。"
             else:
-                tooltip += f"\n\n🟢 运行依赖: 依赖库已全部就绪。"
+                tooltip += f"\n\n运行依赖: 依赖库已全部就绪。"
 
             item.setToolTip(tooltip)
 
@@ -283,13 +283,13 @@ class MetricSelectorWidget(QFrame):
         msg_box.setText(
             f"<h3>算法【{disp_name}】需要安装支持组件</h3>"
             f"<p>检测到当前环境尚未安装：<b>{missing_str}</b></p>"
-            f"<p><b>【环境安全承诺】</b><br>"
-            f"• 安装将仅下载该模型必需的扩展组件，<b>严格保留并锁定现有 PyTorch 与 RTX 4060 显卡加速驱动</b>，绝不降级或替换核心驱动。<br>"
-            f"• 全程无暗箱操作，进度实时在「后台控制台」透明输出。</p>"
-            f"<p>是否立即启动安全安装？</p>"
+            f"<p><b>【环境说明】</b><br>"
+            f"• 安装将仅下载该模型必需的扩展组件，<b>保留现有 PyTorch 与 GPU 驱动环境</b>，不影响核心依赖。<br>"
+            f"• 进度将在后台控制台输出。</p>"
+            f"<p>是否立即安装？</p>"
         )
-        btn_install = msg_box.addButton("📦 安全一键安装", QMessageBox.ButtonRole.AcceptRole)
-        btn_copy = msg_box.addButton("📋 复制安装命令", QMessageBox.ButtonRole.ActionRole)
+        btn_install = msg_box.addButton("一键安装", QMessageBox.ButtonRole.AcceptRole)
+        btn_copy = msg_box.addButton("复制安装命令", QMessageBox.ButtonRole.ActionRole)
         btn_cancel = msg_box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
         msg_box.setDefaultButton(btn_install)
         msg_box.exec()
@@ -298,7 +298,11 @@ class MetricSelectorWidget(QFrame):
             self._start_safe_install(dep_status.missing_required, name)
         else:
             if msg_box.clickedButton() == btn_copy:
-                QApplication.clipboard().setText(dep_status.safe_install_command)
+                import os
+                if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                    cb = QApplication.clipboard()
+                    if cb is not None:
+                        cb.setText(dep_status.safe_install_command)
                 QMessageBox.information(self, "复制成功", "安装命令已复制到剪贴板，您可在终端中手动执行。")
             if self.multi_select:
                 self.list_widget.blockSignals(True)
@@ -390,14 +394,14 @@ class MetricSelectorWidget(QFrame):
         """Populate preset combo from user settings."""
         self.combo_presets.blockSignals(True)
         self.combo_presets.clear()
-        self.combo_presets.addItem("📁 快捷算法组合 (点击切换)...", "")
+        self.combo_presets.addItem("快捷算法组合 (点击切换)...", "")
 
         settings = load_settings()
         presets = settings.get("metric_presets", {})
 
         target_idx = 0
         for idx, (name, metrics) in enumerate(presets.items(), start=1):
-            self.combo_presets.addItem(f"📁 {name} ({len(metrics)}项)", name)
+            self.combo_presets.addItem(f"{name} ({len(metrics)}项)", name)
             if select_name and name == select_name:
                 target_idx = idx
 
@@ -436,20 +440,20 @@ class MetricSelectorWidget(QFrame):
             settings["metric_presets"][preset_name] = sorted(list(self._selected_metrics))
             save_settings(settings)
             self._populate_presets_combo(select_name=preset_name)
-            QMessageBox.information(self, "保存成功", f"算法组合【{preset_name}】已成功保存！")
+            QMessageBox.information(self, "保存成功", f"算法组合【{preset_name}】已成功保存。")
 
     def _show_preset_manage_menu(self) -> None:
         current_preset = self.combo_presets.currentData()
         menu = QMenu(self)
 
-        action_update = menu.addAction("📌 覆盖更新当前组合 (以当前勾选更新)")
+        action_update = menu.addAction("覆盖更新当前组合 (以当前勾选更新)")
         action_update.setEnabled(bool(current_preset))
 
         is_custom = bool(current_preset and current_preset not in ["综合感知与美学", "经典基础通用"])
-        action_delete = menu.addAction(f"🗑️ 删除自定义组合【{current_preset or ''}】")
+        action_delete = menu.addAction(f"删除自定义组合【{current_preset or ''}】")
         action_delete.setEnabled(is_custom)
 
-        action_new = menu.addAction("➕ 新建其他组合...")
+        action_new = menu.addAction("新建其他组合...")
 
         pos = self.btn_manage_preset.mapToGlobal(self.btn_manage_preset.rect().bottomLeft())
         selected = menu.exec(pos)
@@ -469,7 +473,7 @@ class MetricSelectorWidget(QFrame):
                 settings.setdefault("metric_presets", {})[current_preset] = sorted(list(self._selected_metrics))
                 save_settings(settings)
                 self._populate_presets_combo(select_name=current_preset)
-                QMessageBox.information(self, "更新成功", f"组合【{current_preset}】已更新为当前选择！")
+                QMessageBox.information(self, "更新成功", f"组合【{current_preset}】已更新为当前选择。")
 
         elif selected == action_delete and current_preset:
             reply = QMessageBox.question(

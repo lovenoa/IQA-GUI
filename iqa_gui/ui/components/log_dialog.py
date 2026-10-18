@@ -28,7 +28,7 @@ class LogViewerDialog(QDialog):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self.setWindowTitle("📋 后台运行日志与任务监视器 (Background Console)")
+        self.setWindowTitle("后台运行日志")
         self.resize(880, 560)
         self.log_mgr = LogManager.get_instance()
 
@@ -45,8 +45,8 @@ class LogViewerDialog(QDialog):
 
         # Header description
         header_layout = QHBoxLayout()
-        lbl_title = QLabel("<b>后台运行监视器 (Console Logs)</b>")
-        lbl_subtitle = QLabel("实时监测深度学习算法推断、权重下载 (HuggingFace/镜像)、标准输出与报错详情")
+        lbl_title = QLabel("<b>后台运行日志</b>")
+        lbl_subtitle = QLabel("实时监测算法推断、权重下载、标准输出与报错详情")
         lbl_subtitle.setProperty("class", "MutedText")
         header_layout.addWidget(lbl_title)
         header_layout.addWidget(lbl_subtitle)
@@ -58,20 +58,20 @@ class LogViewerDialog(QDialog):
         ctrl_layout.setSpacing(6)
 
         self.edit_filter = QLineEdit()
-        self.edit_filter.setPlaceholderText("🔍 过滤关键字 (如 error, download, cuda, clip)...")
+        self.edit_filter.setPlaceholderText("过滤关键字 (如 error, download, cuda, clip)...")
         self.edit_filter.textChanged.connect(self._apply_filter)
         self.edit_filter.setClearButtonEnabled(True)
 
-        self.chk_autoscroll = QCheckBox("🔄 自动滚屏")
+        self.chk_autoscroll = QCheckBox("自动滚屏")
         self.chk_autoscroll.setChecked(True)
 
-        self.btn_copy = QPushButton("📋 复制全部")
+        self.btn_copy = QPushButton("复制全部")
         self.btn_copy.clicked.connect(self._copy_all)
 
-        self.btn_clear = QPushButton("🧹 清空")
+        self.btn_clear = QPushButton("清空")
         self.btn_clear.clicked.connect(self._clear_logs)
 
-        self.btn_open_file = QPushButton("📁 打开日志文件")
+        self.btn_open_file = QPushButton("打开日志文件")
         self.btn_open_file.clicked.connect(self._open_log_file)
 
         ctrl_layout.addWidget(self.edit_filter, 3)
@@ -145,7 +145,7 @@ class LogViewerDialog(QDialog):
         cursor = self.txt_console.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.txt_console.setTextCursor(cursor)
-        QMessageBox.information(self, "复制成功", "后台运行日志已成功复制到剪贴板！")
+        QMessageBox.information(self, "复制成功", "后台运行日志已复制到剪贴板。")
 
     def _clear_logs(self) -> None:
         """Clear memory and file logs."""

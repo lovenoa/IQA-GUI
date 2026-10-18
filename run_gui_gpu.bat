@@ -3,7 +3,7 @@ chcp 65001 >nul
 cd /d "%~dp0"
 title IQA-GUI (GPU 显卡加速版)
 echo ========================================================
-echo   正在使用 Python 3.12 (NVIDIA RTX 4060 GPU) 启动工作台...
+echo   正在使用 Python 3.12 (GPU 加速环境) 启动工作台...
 echo ========================================================
 "C:\Users\loven\AppData\Local\Programs\Python\Python312\python.exe" -m iqa_gui.main
 if %errorlevel% neq 0 (

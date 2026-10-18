@@ -170,19 +170,19 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self.lbl_status_main, 1)
 
         # VRAM live monitor in status bar
-        self.lbl_vram = QLabel("🎮 显存: -")
+        self.lbl_vram = QLabel("显存: -")
         self.lbl_vram.setStyleSheet("font-size: 11px; padding: 2px 6px;")
         self.lbl_vram.setToolTip("当前独立显卡显存占用情况 (PyTorch 已分配容量 / 显存总容量)")
         self.status_bar.addPermanentWidget(self.lbl_vram)
 
         # Force Purge VRAM Button
-        self.btn_purge_vram = QPushButton("🧹 释放显存")
+        self.btn_purge_vram = QPushButton("释放显存")
         self.btn_purge_vram.setStyleSheet("padding: 2px 8px; font-size: 11px;")
         self.btn_purge_vram.setToolTip("立即卸载所有已加载模型权重并彻底清空 GPU 显存缓存")
         self.btn_purge_vram.clicked.connect(self._on_purge_vram_clicked)
         self.status_bar.addPermanentWidget(self.btn_purge_vram)
 
-        self.btn_status_logs = QPushButton("📋 打开后台控制台")
+        self.btn_status_logs = QPushButton("后台日志")
         self.btn_status_logs.setStyleSheet("padding: 2px 8px; font-size: 11px;")
         self.btn_status_logs.clicked.connect(self.open_log_viewer)
         self.status_bar.addPermanentWidget(self.btn_status_logs)
@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
 
     def _on_tips_toggled(self, checked: bool) -> None:
         self.tips_enabled = checked
-        self.btn_toggle_tips.setText("💡 操作提示: 开" if checked else "💡 操作提示: 关")
+        self.btn_toggle_tips.setText("操作提示: 开" if checked else "操作提示: 关")
         self.settings["show_tips"] = checked
         save_settings(self.settings)
         self.apply_tips_visibility(checked)
@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
             f"• <b>NVIDIA 驱动版本:</b> {self.hw_info.driver_version or '-'}<br>"
             f"• <b>当前 Python 环境:</b> Python {sys.version.split()[0]}<br>"
             f"• <b>PyTorch 版本:</b> {self.hw_info.torch_version}<br>"
-            f"• <b>PyTorch CUDA 支持:</b> {'✅ 是 (已激活显卡加速)' if self.hw_info.torch_cuda_available else '❌ 否 (当前为 CPU 构建版本)'}<br>"
+            f"• <b>PyTorch CUDA 支持:</b> {'是 (已启用显卡加速)' if self.hw_info.torch_cuda_available else '否 (当前为 CPU 构建版本)'}<br>"
             f"• <b>当前生效运算设备:</b> {self.effective_device.upper()}<br><br>"
             f"<b>【诊断与优化建议】</b><br>"
             f"<div style='background: #334155; color: #F1F5F9; padding: 10px; border-radius: 4px;'>"
@@ -275,20 +275,20 @@ class MainWindow(QMainWindow):
                 color = "#F59E0B"
             else:
                 color = "#10B981"
-            self.lbl_vram.setText(f"🎮 显存: <span style='color:{color}; font-weight:bold;'>{alloc:.0f} MB</span> / {total:.0f} MB")
+            self.lbl_vram.setText(f"显存: <span style='color:{color}; font-weight:bold;'>{alloc:.0f} MB</span> / {total:.0f} MB")
             self.lbl_vram.setTextFormat(Qt.TextFormat.RichText)
         else:
-            self.lbl_vram.setText("🖥️ CPU 运算模式")
+            self.lbl_vram.setText("CPU 模式")
 
     def _on_purge_vram_clicked(self) -> None:
         """Manually purge all loaded models and free VRAM."""
         self.evaluator_engine.release_vram(force_unload=True)
         self.update_vram_display()
-        self.status_bar.showMessage("✅ 显存已强制释放，所有已加载模型均已卸载！", 4000)
+        self.status_bar.showMessage("显存已强制释放，所有已加载模型均已卸载。", 4000)
 
     def _on_auto_release_vram_toggled(self, checked: bool) -> None:
         self.auto_release_vram = checked
-        self.btn_toggle_vram.setText("🔄 自动释放显存: 开" if checked else "🔄 自动释放显存: 关")
+        self.btn_toggle_vram.setText("自动释放显存: 开" if checked else "自动释放显存: 关")
         self.settings["auto_release_vram"] = checked
         save_settings(self.settings)
         if checked:
