@@ -245,7 +245,7 @@ class ImageViewerCard(QFrame):
         if self.multi_image_mode:
             file_paths, _ = QFileDialog.getOpenFileNames(
                 self,
-                f"选择待评测图像 (最多3张)",
+                f"选择待评测图像 (支持多选对比)",
                 "",
                 "图像文件 (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;所有文件 (*.*)",
             )
@@ -268,14 +268,13 @@ class ImageViewerCard(QFrame):
         return [self.current_file_path] if self.current_file_path else []
 
     def add_images(self, paths: List[str]) -> None:
-        """Add up to 3 images to the multi-image list."""
+        """Add images to the multi-image comparison list."""
         added = False
         for p in paths:
             norm = os.path.normpath(p)
             if os.path.exists(norm) and norm not in self.image_paths:
-                if len(self.image_paths) < 3:
-                    self.image_paths.append(norm)
-                    added = True
+                self.image_paths.append(norm)
+                added = True
         if self.image_paths:
             if added:
                 self.active_index = len(self.image_paths) - 1
@@ -293,11 +292,8 @@ class ImageViewerCard(QFrame):
 
         if self.multi_image_mode:
             if norm_path not in self.image_paths:
-                if len(self.image_paths) >= 3:
-                    self.image_paths[self.active_index] = norm_path
-                else:
-                    self.image_paths.append(norm_path)
-                    self.active_index = len(self.image_paths) - 1
+                self.image_paths.append(norm_path)
+                self.active_index = len(self.image_paths) - 1
             else:
                 self.active_index = self.image_paths.index(norm_path)
             self._update_pills_ui()
@@ -376,7 +372,7 @@ class ImageViewerCard(QFrame):
 
         if not self.image_paths:
             self.btn_clear_all.hide()
-            hint = QLabel("💡 待测区支持拖入最多 3 张图像进行横向对比")
+            hint = QLabel("💡 待测区支持拖入任意多张图像进行横向对比PK")
             hint.setProperty("class", "MutedText")
             hint.setStyleSheet("font-size: 11px;")
             self.pills_layout.addWidget(hint)
@@ -426,13 +422,12 @@ class ImageViewerCard(QFrame):
 
             self.pills_layout.addWidget(pill_frame)
 
-        # Add image button if < 3
-        if len(self.image_paths) < 3:
-            btn_add = QPushButton(f"➕ 添加第 {len(self.image_paths)+1} 张图")
-            btn_add.setToolTip("选择或直接拖入新图片至待测框")
-            btn_add.setStyleSheet("font-size: 11px; padding: 2px 8px;")
-            btn_add.clicked.connect(self._on_browse_clicked)
-            self.pills_layout.addWidget(btn_add)
+        # Add image button
+        btn_add = QPushButton(f"➕ 添加第 {len(self.image_paths)+1} 张图")
+        btn_add.setToolTip("选择或直接拖入新图片至待测框")
+        btn_add.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        btn_add.clicked.connect(self._on_browse_clicked)
+        self.pills_layout.addWidget(btn_add)
 
     def display_pixmap(self, pixmap: QPixmap) -> None:
         """Display an existing QPixmap in the scene."""

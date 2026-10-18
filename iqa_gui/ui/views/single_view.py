@@ -8,6 +8,8 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -34,6 +37,7 @@ from iqa_gui.core.evaluator import (
 from iqa_gui.core.model_manager import ModelManager
 from iqa_gui.core.worker_threads import SingleEvalWorker
 from iqa_gui.ui.components.compare_dialog import MultiImageCompareDialog
+from iqa_gui.ui.components.multi_round_dialog import MultiRoundSummaryDialog
 from iqa_gui.ui.components.image_viewer import ImageViewerCard
 from iqa_gui.ui.components.metric_selector import MetricSelectorWidget
 
@@ -53,7 +57,7 @@ interpret_anime_aigc_score = interpret_perceptual_score  # 兼容别名
 
 
 class SingleEvalView(QWidget):
-    """View for evaluating single images, image pairs, or up to 3 comparison targets."""
+    """View for evaluating single images, image pairs, or multiple comparison targets across multiple rounds."""
 
     def __init__(self, evaluator_engine: EvaluatorEngine, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -63,6 +67,8 @@ class SingleEvalView(QWidget):
 
         # State management
         self.eval_results_map: Dict[str, List[SingleEvalResult]] = {}
+        self.rounds_eval_map: Dict[int, Dict[str, List[SingleEvalResult]]] = {}
+        self.current_round: int = 1
         self.default_order_results: List[SingleEvalResult] = []
         self.latest_results: List[SingleEvalResult] = []
         self.sort_state: Optional[Tuple[int, bool]] = None  # (column_index, ascending)
@@ -83,7 +89,7 @@ class SingleEvalView(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
 
-        # 1. Metric Selector (Multi-select enabled with anime presets and selected chips)
+        # 1. Metric Selector (Multi-select enabled with presets and selected chips)
         self.metric_selector = MetricSelectorWidget(multi_select=True, parent=self)
         self.metric_selector.selection_changed.connect(self._on_metric_changed)
         left_layout.addWidget(self.metric_selector, 3)
@@ -102,7 +108,23 @@ class SingleEvalView(QWidget):
         self.prompt_frame.hide()
         left_layout.addWidget(self.prompt_frame)
 
-        # 3. Action Buttons & Comparison Trigger
+        # 3. Multi-Round Settings Row
+        round_cfg_row = QHBoxLayout()
+        self.chk_multi_round = QCheckBox("启用多轮重复测试 (检验算法稳定性)")
+        self.chk_multi_round.setToolTip("勾选后将对选定算法重复执行指定轮数，以评估随机性、极差与均值")
+        self.spin_rounds = QSpinBox()
+        self.spin_rounds.setRange(2, 20)
+        self.spin_rounds.setValue(3)
+        self.spin_rounds.setPrefix("重复 ")
+        self.spin_rounds.setSuffix(" 轮")
+        self.spin_rounds.setEnabled(False)
+        self.chk_multi_round.toggled.connect(self.spin_rounds.setEnabled)
+        round_cfg_row.addWidget(self.chk_multi_round)
+        round_cfg_row.addWidget(self.spin_rounds)
+        round_cfg_row.addStretch()
+        left_layout.addLayout(round_cfg_row)
+
+        # 4. Action Buttons & Comparison/Multi-round Triggers
         self.btn_run = QPushButton("🚀 立即开始质量评估")
         self.btn_run.setProperty("class", "PrimaryButton")
         self.btn_run.setMinimumHeight(34)
@@ -116,7 +138,14 @@ class SingleEvalView(QWidget):
         self.btn_open_compare.hide()
         left_layout.addWidget(self.btn_open_compare)
 
-        # 4. Result Scorecard Panel (High density table + sorting + explanation)
+        self.btn_open_multi_round = QPushButton("📈 查看多轮测试统计聚合报表 (极差/标准差/均值)")
+        self.btn_open_multi_round.setProperty("class", "SecondaryButton")
+        self.btn_open_multi_round.setMinimumHeight(32)
+        self.btn_open_multi_round.clicked.connect(self.open_multi_round_dialog)
+        self.btn_open_multi_round.hide()
+        left_layout.addWidget(self.btn_open_multi_round)
+
+        # 5. Result Scorecard Panel (High density table + sorting + explanation)
         self.result_card = QFrame()
         self.result_card.setProperty("class", "CardFrame")
         card_layout = QVBoxLayout(self.result_card)
@@ -129,6 +158,20 @@ class SingleEvalView(QWidget):
         self.lbl_eval_status.setProperty("class", "MutedText")
         header_res.addWidget(self.lbl_result_title)
         header_res.addStretch()
+
+        # Multi-round selector dropdown in scorecard header
+        self.round_switch_widget = QWidget()
+        round_switch_layout = QHBoxLayout(self.round_switch_widget)
+        round_switch_layout.setContentsMargins(0, 0, 0, 0)
+        round_switch_layout.setSpacing(4)
+        self.lbl_round_select = QLabel("<b>查看轮次:</b>")
+        self.combo_round_select = QComboBox()
+        self.combo_round_select.currentIndexChanged.connect(self._on_round_selection_changed)
+        round_switch_layout.addWidget(self.lbl_round_select)
+        round_switch_layout.addWidget(self.combo_round_select)
+        self.round_switch_widget.hide()
+        header_res.addWidget(self.round_switch_widget)
+
         header_res.addWidget(self.lbl_eval_status)
         card_layout.addLayout(header_res)
 
@@ -162,10 +205,10 @@ class SingleEvalView(QWidget):
         side_layout.setContentsMargins(4, 4, 4, 4)
         side_layout.setSpacing(6)
 
-        # Target viewer supports multi-image comparison (up to 3 images)
+        # Target viewer supports multi-image comparison (unlimited targets)
         self.viewer_target = ImageViewerCard(
             title="待评测目标图像 (Target)",
-            placeholder_text="拖入待评估图像或点击选择 (支持最多3张对比)",
+            placeholder_text="拖入待评估图像或点击选择 (支持多图横向对比PK)",
             multi_image_mode=True,
         )
         self.viewer_target.image_changed.connect(self._on_target_image_changed)
@@ -236,7 +279,9 @@ class SingleEvalView(QWidget):
 
     def _on_target_image_changed(self, target_path: str) -> None:
         """Called when user selects a different image tab in target viewer."""
-        if not target_path or target_path not in self.eval_results_map:
+        current_map = self.rounds_eval_map.get(self.current_round, self.eval_results_map)
+
+        if not target_path or target_path not in current_map:
             self.default_order_results = []
             self.latest_results = []
             self.sort_state = None
@@ -248,11 +293,12 @@ class SingleEvalView(QWidget):
                 self.lbl_eval_status.setText("就绪: 拖入图片后点击评估")
             return
 
-        self.default_order_results = list(self.eval_results_map[target_path])
+        self.default_order_results = list(current_map[target_path])
         self.sort_state = None
         self._apply_sorting_and_render()
         fname = os.path.basename(target_path)
-        self.lbl_eval_status.setText(f"展示中: [{fname}] (共 {len(self.default_order_results)} 项算法)")
+        round_hint = f" [第 {self.current_round} 轮]" if len(self.rounds_eval_map) > 1 else ""
+        self.lbl_eval_status.setText(f"展示中: [{fname}]{round_hint} (共 {len(self.default_order_results)} 项算法)")
 
     def _on_target_images_updated(self, paths: List[str]) -> None:
         """Called when images are added or removed from target canvas."""
@@ -260,6 +306,11 @@ class SingleEvalView(QWidget):
         for k in existing_keys:
             if k not in paths:
                 del self.eval_results_map[k]
+
+        for r_num in list(self.rounds_eval_map.keys()):
+            for k in list(self.rounds_eval_map[r_num].keys()):
+                if k not in paths:
+                    del self.rounds_eval_map[r_num][k]
 
         evaluated_count = len(self.eval_results_map)
         if evaluated_count >= 2:
@@ -270,6 +321,9 @@ class SingleEvalView(QWidget):
             self.btn_open_compare.hide()
             self.btn_open_compare.setEnabled(False)
 
+        if len(self.rounds_eval_map) <= 1:
+            self.btn_open_multi_round.hide()
+
     def open_comparison_dialog(self) -> None:
         """Open the multi-image comparison PK report dialog."""
         if len(self.eval_results_map) < 2:
@@ -278,6 +332,29 @@ class SingleEvalView(QWidget):
         paths = [p for p in self.viewer_target.get_image_paths() if p in self.eval_results_map]
         dlg = MultiImageCompareDialog(paths, self.eval_results_map, self)
         dlg.exec()
+
+    def open_multi_round_dialog(self) -> None:
+        """Open the multi-round summary dialog."""
+        paths = [p for p in self.viewer_target.get_image_paths() if any(p in self.rounds_eval_map.get(r, {}) for r in self.rounds_eval_map)]
+        if not paths or len(self.rounds_eval_map) <= 1:
+            QMessageBox.information(self, "提示", "请先执行多轮测试后再查看多轮统计聚合报表。")
+            return
+        dlg = MultiRoundSummaryDialog(paths, self.rounds_eval_map, self)
+        dlg.exec()
+
+    def _on_round_selection_changed(self, idx: int) -> None:
+        """Handle user selecting a different round in the scorecard header combo."""
+        if idx < 0:
+            return
+        round_num = idx + 1
+        self.current_round = round_num
+
+        cur_target = self.viewer_target.current_file_path
+        if cur_target and self.rounds_eval_map.get(round_num, {}).get(cur_target):
+            self.default_order_results = list(self.rounds_eval_map[round_num][cur_target])
+            self._apply_sorting_and_render()
+            fname = os.path.basename(cur_target)
+            self.lbl_eval_status.setText(f"第 {round_num} 轮结果: [{fname}] (共 {len(self.default_order_results)} 项算法)")
 
     def _on_header_section_clicked(self, logical_index: int) -> None:
         """Handle header click for 3-state cycling: Descending -> Ascending -> Default order."""
@@ -493,10 +570,12 @@ class SingleEvalView(QWidget):
             return
 
         # Prepare UI
+        rounds = self.spin_rounds.value() if self.chk_multi_round.isChecked() else 1
         self.btn_run.setEnabled(False)
         self.btn_run.setText("⏳ 正在计算中...")
-        total_evals = len(target_paths) * len(selected)
-        self.lbl_eval_status.setText(f"正在计算 (1/{total_evals}) ...")
+        total_evals = rounds * len(target_paths) * len(selected)
+        round_hint = f"共 {rounds} 轮, " if rounds > 1 else ""
+        self.lbl_eval_status.setText(f"正在计算 ({round_hint}1/{total_evals}) ...")
         self.lbl_explanation.setText("正在执行深度学习算法评估，请稍候...")
         self.table_scorecard.setRowCount(0)
 
@@ -510,9 +589,11 @@ class SingleEvalView(QWidget):
             target_path=target_paths,
             ref_path=ref_path,
             prompt=prompt,
+            rounds=rounds,
             auto_release_vram=auto_release,
         )
         self.active_worker.progress.connect(self._on_worker_progress)
+        self.active_worker.rounds_finished.connect(self._on_rounds_eval_finished)
         self.active_worker.multi_finished.connect(self._on_multi_eval_finished)
         self.active_worker.finished.connect(self._on_eval_finished)
         self.active_worker.error.connect(self._on_eval_error)
@@ -520,6 +601,25 @@ class SingleEvalView(QWidget):
 
     def _on_worker_progress(self, current: int, total: int, metric_name: str) -> None:
         self.lbl_eval_status.setText(f"正在计算 ({current}/{total}): {metric_name} ...")
+
+    def _on_rounds_eval_finished(self, multi_round_map: Dict[int, Dict[str, List[SingleEvalResult]]]) -> None:
+        """Handle completion of multi-round evaluation."""
+        self.rounds_eval_map = multi_round_map
+        total_rounds = len(multi_round_map)
+
+        if total_rounds > 1:
+            self.combo_round_select.blockSignals(True)
+            self.combo_round_select.clear()
+            for r in range(1, total_rounds + 1):
+                self.combo_round_select.addItem(f"第 {r} 轮")
+            self.combo_round_select.setCurrentIndex(0)
+            self.combo_round_select.blockSignals(False)
+            self.current_round = 1
+            self.round_switch_widget.show()
+            self.btn_open_multi_round.show()
+        else:
+            self.round_switch_widget.hide()
+            self.btn_open_multi_round.hide()
 
     def _on_multi_eval_finished(self, eval_map: Dict[str, List[SingleEvalResult]]) -> None:
         """Handle evaluation completion for all targets."""
@@ -539,8 +639,10 @@ class SingleEvalView(QWidget):
         self.btn_run.setText("🚀 立即开始质量评估")
 
         cur_target = self.viewer_target.current_file_path
-        if cur_target and cur_target in self.eval_results_map:
-            self.default_order_results = list(self.eval_results_map[cur_target])
+        current_map = self.rounds_eval_map.get(self.current_round, self.eval_results_map)
+
+        if cur_target and cur_target in current_map:
+            self.default_order_results = list(current_map[cur_target])
         else:
             self.default_order_results = list(results)
 
@@ -549,7 +651,8 @@ class SingleEvalView(QWidget):
 
         fname = os.path.basename(cur_target) if cur_target else "目标图像"
         total = len(self.default_order_results)
-        self.lbl_eval_status.setText(f"评估完成: 当前查看 [{fname}] (共 {total} 项算法)")
+        round_hint = f" [第 {self.current_round} 轮]" if len(self.rounds_eval_map) > 1 else ""
+        self.lbl_eval_status.setText(f"评估完成: 当前查看 [{fname}]{round_hint} (共 {total} 项算法)")
 
         # Refresh VRAM status on main window
         main_win = self.window()

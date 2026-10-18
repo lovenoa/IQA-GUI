@@ -139,6 +139,7 @@ class MultiImageCompareDialog(QDialog):
 
         num_imgs = len(self.image_paths)
         win_counts = [0] * num_imgs
+        lose_counts = [0] * num_imgs
 
         for row_idx, m_name in enumerate(metric_names):
             # Gather results for m_name across images
@@ -171,15 +172,18 @@ class MultiImageCompareDialog(QDialog):
             item_dir.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_compare.setItem(row_idx, 2, item_dir)
 
-            # Determine best score (winner)
+            # Determine best score (winner) and worst score (loser)
             valid_scores = [(idx, r.score) for idx, r in enumerate(results_for_m) if r is not None]
             best_idx: Optional[int] = None
+            worst_idx: Optional[int] = None
             is_tie = False
             if valid_scores:
                 if lower_better:
                     best_score = min(s for _, s in valid_scores)
+                    worst_score = max(s for _, s in valid_scores)
                 else:
                     best_score = max(s for _, s in valid_scores)
+                    worst_score = min(s for _, s in valid_scores)
 
                 tied_indices = [idx for idx, s in valid_scores if abs(s - best_score) < 1e-5]
                 if len(tied_indices) == 1:
@@ -187,6 +191,13 @@ class MultiImageCompareDialog(QDialog):
                     win_counts[best_idx] += 1
                 else:
                     is_tie = True
+
+                # When comparing >= 3 images, also determine the single worst performer
+                if num_imgs >= 3 and abs(best_score - worst_score) > 1e-5:
+                    worst_tied = [idx for idx, s in valid_scores if abs(s - worst_score) < 1e-5]
+                    if len(worst_tied) == 1:
+                        worst_idx = worst_tied[0]
+                        lose_counts[worst_idx] += 1
 
             # Col 3 .. 3 + num_imgs - 1: Image Scores
             for img_idx, r in enumerate(results_for_m):
@@ -203,18 +214,31 @@ class MultiImageCompareDialog(QDialog):
                         font = item_score.font()
                         font.setBold(True)
                         item_score.setFont(font)
+                        item_score.setToolTip("该图片此项指标得分最优 (胜出)")
+                    # Highlight worst performer in soft coral red when >= 3 images
+                    elif num_imgs >= 3 and worst_idx is not None and img_idx == worst_idx:
+                        item_score.setBackground(QColor(225, 29, 72, 35))
+                        item_score.setForeground(QColor(225, 29, 72))
+                        font = item_score.font()
+                        font.setBold(True)
+                        item_score.setFont(font)
+                        item_score.setToolTip("该图片此项指标得分垫底 (最差)")
+
                     self.table_compare.setItem(row_idx, col_idx, item_score)
                 else:
                     item_na = QTableWidgetItem("N/A")
                     item_na.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.table_compare.setItem(row_idx, col_idx, item_na)
 
-            # Col: Winner
+            # Col: Winner (and Loser if >= 3 images)
             win_col_idx = 3 + num_imgs
             if is_tie:
                 item_win = QTableWidgetItem("🤝 平局")
             elif best_idx is not None:
-                item_win = QTableWidgetItem(f"🏆 图 {best_idx + 1} 优胜")
+                win_text = f"🏆 图 {best_idx + 1} 优胜"
+                if num_imgs >= 3 and worst_idx is not None:
+                    win_text += f" | 📉 图 {worst_idx + 1} 垫底"
+                item_win = QTableWidgetItem(win_text)
                 item_win.setForeground(QColor(39, 174, 96))
                 font = item_win.font()
                 font.setBold(True)
@@ -243,8 +267,12 @@ class MultiImageCompareDialog(QDialog):
 
         # Update summary banner
         summary_parts = []
-        for i, cnt in enumerate(win_counts):
-            summary_parts.append(f"图 {i+1} 胜出 <b>{cnt}</b> 项")
+        for i, w_cnt in enumerate(win_counts):
+            if num_imgs >= 3:
+                l_cnt = lose_counts[i]
+                summary_parts.append(f"图 {i+1} 胜出 <b>{w_cnt}</b> 项 (垫底 <b>{l_cnt}</b> 项)")
+            else:
+                summary_parts.append(f"图 {i+1} 胜出 <b>{w_cnt}</b> 项")
         self.lbl_summary_bar.setText(f"🥇 PK 战况统计: {' | '.join(summary_parts)}")
 
     def _get_metric_comparison_advice(self, metric_name: str, mode: str) -> str:

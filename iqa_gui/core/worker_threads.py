@@ -16,10 +16,11 @@ from iqa_gui.core.log_manager import LogManager
 
 
 class SingleEvalWorker(QThread):
-    """Background worker for evaluating single image, image pair, or up to 3 comparison targets."""
+    """Background worker for evaluating single image, image pair, or multiple targets across one or multiple rounds."""
     progress = Signal(int, int, str)   # Emits (current_index, total_count, metric_name)
-    finished = Signal(object)          # Emits List[SingleEvalResult] for active/first target
-    multi_finished = Signal(dict)      # Emits Dict[str, List[SingleEvalResult]]
+    finished = Signal(object)          # Emits List[SingleEvalResult] for active/first target (Round 1)
+    multi_finished = Signal(object)    # Emits Dict[str, List[SingleEvalResult]] for Round 1
+    rounds_finished = Signal(object)   # Emits Dict[int, Dict[str, List[SingleEvalResult]]] for all rounds
     error = Signal(str)                # Emits error message
 
     def __init__(
@@ -29,6 +30,7 @@ class SingleEvalWorker(QThread):
         target_path: Union[str, List[str]],
         ref_path: Optional[str] = None,
         prompt: Optional[str] = None,
+        rounds: int = 1,
         auto_release_vram: bool = True,
         parent: Optional[QObject] = None,
     ):
@@ -48,6 +50,7 @@ class SingleEvalWorker(QThread):
 
         self.ref_path = ref_path
         self.prompt = prompt
+        self.rounds = max(1, int(rounds))
         self.auto_release_vram = auto_release_vram
         self._is_cancelled = False
 
@@ -61,54 +64,60 @@ class SingleEvalWorker(QThread):
         }
         error_occurred = False
         try:
-            eval_map: Dict[str, List[SingleEvalResult]] = {}
-            total_steps = len(self.target_paths) * len(self.metric_names)
+            multi_round_map: Dict[int, Dict[str, List[SingleEvalResult]]] = {}
+            total_steps = self.rounds * len(self.target_paths) * len(self.metric_names)
             step_counter = 0
 
-            for img_idx, cur_target in enumerate(self.target_paths):
+            for r_idx in range(1, self.rounds + 1):
                 if self._is_cancelled:
                     break
-                results_this_img: List[SingleEvalResult] = []
+                eval_map_this_round: Dict[str, List[SingleEvalResult]] = {}
 
-                for m_name in self.metric_names:
+                for img_idx, cur_target in enumerate(self.target_paths):
                     if self._is_cancelled:
                         break
-                    step_counter += 1
-                    status_hint = (
-                        f"[图 {img_idx+1}/{len(self.target_paths)}] {m_name}"
-                        if len(self.target_paths) > 1
-                        else m_name
-                    )
-                    self.progress.emit(step_counter, total_steps, status_hint)
+                    results_this_img: List[SingleEvalResult] = []
 
-                    # Determine if reference image is needed for this specific metric
-                    model_info = self.evaluator.model_manager.get_model(m_name)
-                    need_ref = (model_info.mode == "FR") if model_info else False
-                    ref = self.ref_path if need_ref else None
+                    for m_name in self.metric_names:
+                        if self._is_cancelled:
+                            break
+                        step_counter += 1
+                        round_prefix = f"[轮次 {r_idx}/{self.rounds}] " if self.rounds > 1 else ""
+                        target_prefix = f"[图 {img_idx+1}/{len(self.target_paths)}] " if len(self.target_paths) > 1 else ""
+                        status_hint = f"{round_prefix}{target_prefix}{m_name}"
+                        self.progress.emit(step_counter, total_steps, status_hint)
 
-                    res = self.evaluator.evaluate_single(
-                        metric_name=m_name,
-                        target_path=cur_target,
-                        ref_path=ref,
-                        prompt=self.prompt,
-                    )
-                    results_this_img.append(res)
+                        # Determine if reference image is needed for this specific metric
+                        model_info = self.evaluator.model_manager.get_model(m_name)
+                        need_ref = (model_info.mode == "FR") if model_info else False
+                        ref = self.ref_path if need_ref else None
 
-                    # --- STEP-BY-STEP VRAM RELEASE (每一步完成即时释放显存) ---
-                    if self.auto_release_vram:
-                        self.evaluator.unload_metric(m_name)
-                        self.evaluator.release_vram(force_unload=False)
-                    elif m_name.lower() in heavy_metrics:
-                        self.evaluator.unload_metric(m_name)
-                        self.evaluator.release_vram(force_unload=False)
-                    else:
-                        self.evaluator.release_vram(force_unload=False)
+                        res = self.evaluator.evaluate_single(
+                            metric_name=m_name,
+                            target_path=cur_target,
+                            ref_path=ref,
+                            prompt=self.prompt,
+                        )
+                        results_this_img.append(res)
 
-                eval_map[cur_target] = results_this_img
+                        # --- STEP-BY-STEP VRAM RELEASE (每一步完成即时释放显存) ---
+                        if self.auto_release_vram:
+                            self.evaluator.unload_metric(m_name)
+                            self.evaluator.release_vram(force_unload=False)
+                        elif m_name.lower() in heavy_metrics:
+                            self.evaluator.unload_metric(m_name)
+                            self.evaluator.release_vram(force_unload=False)
+                        else:
+                            self.evaluator.release_vram(force_unload=False)
+
+                    eval_map_this_round[cur_target] = results_this_img
+                multi_round_map[r_idx] = eval_map_this_round
 
             if not self._is_cancelled:
-                self.multi_finished.emit(eval_map)
-                primary_results = eval_map.get(self.target_path, [])
+                self.rounds_finished.emit(multi_round_map)
+                round_1 = multi_round_map.get(1, {})
+                self.multi_finished.emit(round_1)
+                primary_results = round_1.get(self.target_path, [])
                 self.finished.emit(primary_results)
         except Exception as e:
             error_occurred = True

@@ -357,5 +357,107 @@ def test_multi_image_compare_dialog():
             os.remove(csv_path)
 
 
+def test_multi_image_compare_dialog_three_images():
+    from iqa_gui.core.evaluator import SingleEvalResult
+    from iqa_gui.ui.components.compare_dialog import MultiImageCompareDialog
+
+    # 3 images: img 1 has 32.0, img 2 has 38.0 (best), img 3 has 25.0 (worst)
+    p3 = SAMPLE_DIST + "_3"
+    r1 = SingleEvalResult("psnr", 32.0, 0.1, False, "[0, 50]", "FR", SAMPLE_DIST)
+    r2 = SingleEvalResult("psnr", 38.0, 0.1, False, "[0, 50]", "FR", SAMPLE_REF)
+    r3 = SingleEvalResult("psnr", 25.0, 0.1, False, "[0, 50]", "FR", p3)
+
+    eval_map = {
+        SAMPLE_DIST: [r1],
+        SAMPLE_REF: [r2],
+        p3: [r3],
+    }
+
+    dlg = MultiImageCompareDialog([SAMPLE_DIST, SAMPLE_REF, p3], eval_map)
+    assert dlg.table_compare.rowCount() == 1
+    # Check winner column has both winner (Image 2) and loser (Image 3)
+    col_winner_idx = 3 + 3
+    winner_item = dlg.table_compare.item(0, col_winner_idx)
+    assert "🏆 图 2 优胜" in winner_item.text()
+    assert "📉 图 3 垫底" in winner_item.text()
+
+
+def test_multi_round_summary_dialog_single_and_multi():
+    from iqa_gui.core.evaluator import SingleEvalResult
+    from iqa_gui.ui.components.multi_round_dialog import MultiRoundSummaryDialog
+
+    # Mode 1: Single image, 3 rounds
+    r1 = SingleEvalResult("qalign_8bit", 4.10, 0.1, False, "[1, 5]", "NR", SAMPLE_DIST)
+    r2 = SingleEvalResult("qalign_8bit", 4.15, 0.1, False, "[1, 5]", "NR", SAMPLE_DIST)
+    r3 = SingleEvalResult("qalign_8bit", 4.05, 0.1, False, "[1, 5]", "NR", SAMPLE_DIST)
+    rounds_map_single = {
+        1: {SAMPLE_DIST: [r1]},
+        2: {SAMPLE_DIST: [r2]},
+        3: {SAMPLE_DIST: [r3]},
+    }
+    dlg_single = MultiRoundSummaryDialog([SAMPLE_DIST], rounds_map_single)
+    assert dlg_single.table_single.rowCount() == 1
+    # Check mean, range, std dev
+    # mean = (4.10+4.15+4.05)/3 = 4.1000, range = 4.15-4.05 = 0.1000
+    mean_item = dlg_single.table_single.item(0, 6)
+    rng_item = dlg_single.table_single.item(0, 7)
+    assert "4.1000" in mean_item.text()
+    assert "0.1000" in rng_item.text()
+
+    copy_text = dlg_single._copy_to_clipboard()
+    assert "4.1000" in copy_text
+
+    # Mode 2: Multi image (2 images, 2 rounds)
+    r1_b = SingleEvalResult("qalign_8bit", 3.80, 0.1, False, "[1, 5]", "NR", SAMPLE_REF)
+    r2_b = SingleEvalResult("qalign_8bit", 3.82, 0.1, False, "[1, 5]", "NR", SAMPLE_REF)
+    rounds_map_multi = {
+        1: {SAMPLE_DIST: [r1], SAMPLE_REF: [r1_b]},
+        2: {SAMPLE_DIST: [r2], SAMPLE_REF: [r2_b]},
+    }
+    dlg_multi = MultiRoundSummaryDialog([SAMPLE_DIST, SAMPLE_REF], rounds_map_multi)
+    assert dlg_multi.tab_widget.count() == 2
+    assert dlg_multi.table_multi_summary.rowCount() == 1
+    # Check winner column in summary
+    assert "🏆 图 1" in dlg_multi.table_multi_summary.item(0, 9).text()
+
+
+def test_single_view_multi_round_gui():
+    window = MainWindow()
+    view = window.view_single
+
+    # Multi-round controls
+    assert hasattr(view, "chk_multi_round")
+    assert hasattr(view, "spin_rounds")
+    assert hasattr(view, "combo_round_select")
+    assert hasattr(view, "btn_open_multi_round")
+
+    # Toggle checkbox
+    view.chk_multi_round.setChecked(True)
+    assert view.spin_rounds.isEnabled() is True
+    view.spin_rounds.setValue(3)
+
+    # Simulate multi-round finish
+    from iqa_gui.core.evaluator import SingleEvalResult
+    r1 = SingleEvalResult("psnr", 35.0, 0.1, False, "[0, 50]", "FR", SAMPLE_DIST)
+    r2 = SingleEvalResult("psnr", 35.5, 0.1, False, "[0, 50]", "FR", SAMPLE_DIST)
+    rounds_map = {
+        1: {SAMPLE_DIST: [r1]},
+        2: {SAMPLE_DIST: [r2]},
+    }
+    view.viewer_target.load_image(SAMPLE_DIST)
+    view._on_rounds_eval_finished(rounds_map)
+    view._on_eval_finished(rounds_map[1][SAMPLE_DIST])
+
+    assert view.round_switch_widget.isHidden() is False
+    assert view.btn_open_multi_round.isHidden() is False
+    assert view.combo_round_select.count() == 2
+
+    # Switch to round 2 in GUI
+    view.combo_round_select.setCurrentIndex(1)
+    assert view.current_round == 2
+    assert "第 2 轮" in view.lbl_eval_status.text()
+
+
+
 
 

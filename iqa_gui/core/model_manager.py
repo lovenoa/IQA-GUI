@@ -554,24 +554,124 @@ class ModelManager:
         """Return category IDs and descriptive labels."""
         return CATEGORY_NAMES.copy()
 
+    def get_all_cache_roots(self) -> List[Path]:
+        """Return all valid cache directories (Torch Hub, PyIQA, HuggingFace Hub, and CLIP)."""
+        home = Path.home()
+        candidates = [
+            self.cache_dir,
+            home / ".cache" / "torch" / "hub" / "checkpoints",
+            home / ".cache" / "torch" / "hub" / "clip",
+            home / ".cache" / "torch" / "hub",
+            home / ".cache" / "clip",
+            home / ".cache" / "huggingface" / "hub",
+        ]
+        if "HF_HOME" in os.environ:
+            candidates.append(Path(os.environ["HF_HOME"]) / "hub")
+        if "TORCH_HOME" in os.environ:
+            candidates.append(Path(os.environ["TORCH_HOME"]) / "hub")
+        return [c for c in candidates if c.exists()]
+
     def get_cached_weights(self) -> List[str]:
-        """List all downloaded weight files present in cache directory."""
-        if not self.cache_dir.exists():
-            return []
-        return [f.name for f in self.cache_dir.iterdir() if f.is_file() and f.suffix in [".pth", ".pt", ".bin"]]
+        """List all downloaded weight files present across all cache directories."""
+        weights = set()
+        valid_exts = {".pth", ".pt", ".bin", ".safetensors", ".mat"}
+        for root in self.get_all_cache_roots():
+            try:
+                for f in root.glob("**/*"):
+                    if f.is_file() and f.suffix.lower() in valid_exts and not f.name.endswith(".partial"):
+                        weights.add(f.name)
+            except Exception:
+                pass
+        return sorted(list(weights))
 
     def is_cached(self, model_name: str) -> bool:
         """Check whether the model's weight is present in the cache."""
+        import urllib.parse
+
         info = self.get_model(model_name)
         if not info or not info.requires_weights:
             return True  # Doesn't require weights or unknown
+
+        m_lower = model_name.lower().strip()
+
+        # Known HuggingFace / repository pattern mapping
+        hf_map = {
+            "qalign": ["one-align", "q-future"],
+            "qalign_8bit": ["one-align", "q-future"],
+            "qalign_4bit": ["one-align", "q-future"],
+            "qrealign": ["one-align", "qrealign"],
+            "qrealign-mini": ["one-align", "qrealign"],
+            "qrealign-lite": ["one-align", "qrealign"],
+            "qrealign-pro": ["one-align", "qrealign"],
+            "mplug_owl": ["mplug-owl"],
+            "clipscore": ["clip-vit-large-patch14", "vit-l-14"],
+            "clipiqa": ["vit-b-32", "clip"],
+            "clipiqa+": ["vit-b-32", "clip-iqa%2b", "clipiqa%2b", "rn50", "vitl14"],
+            "laion_aes": ["sac%2blogos", "sac+logos", "vit-l-14", "vit-l/14"],
+            "musiq": ["musiq"],
+            "musiq-spaq": ["musiq_spaq", "musiq"],
+            "musiq-ava": ["musiq_ava", "musiq"],
+            "maniqa": ["maniqa"],
+            "brisque": ["brisque_svm", "brisque_matlab"],
+            "fid": ["pt_inception"],
+            "fid_dinov2": ["pt_inception", "dinov2"],
+            "sfid": ["pt_inception"],
+            "inception_score": ["pt_inception"],
+        }
+
+        patterns = hf_map.get(m_lower, [])
+        if not patterns:
+            base = m_lower.split("_")[0].split("-")[0]
+            if base in hf_map:
+                patterns = hf_map[base]
+
+        # 1. Check HuggingFace hub snapshots
+        for root in self.get_all_cache_roots():
+            if "huggingface" in str(root).lower() and patterns:
+                try:
+                    for item in root.iterdir():
+                        if item.is_dir() and any(p in item.name.lower() for p in patterns):
+                            snapshots = item / "snapshots"
+                            if snapshots.exists() and any(snapshots.iterdir()):
+                                return True
+                except Exception:
+                    pass
+
+        # 2. Check explicit default weight file across cache roots
         if info.default_weight_file:
-            target = self.cache_dir / info.default_weight_file
-            return target.exists()
-        # Generic heuristic: check if any cached file contains model name
-        for f in self.get_cached_weights():
-            if model_name in f.lower():
-                return True
+            exp_file = info.default_weight_file.lower()
+            for root in self.get_all_cache_roots():
+                target = root / info.default_weight_file
+                if target.exists() and not target.name.endswith(".partial"):
+                    return True
+                # Match unquoted name (e.g. sac+logos vs sac%2Blogos)
+                try:
+                    for f in root.iterdir():
+                        if f.is_file() and not f.name.endswith(".partial"):
+                            unq = urllib.parse.unquote(f.name).lower()
+                            if unq == exp_file or f.name.lower() == exp_file:
+                                return True
+                except Exception:
+                    pass
+
+        # 3. Search across all cache roots
+        valid_exts = {".pth", ".pt", ".bin", ".safetensors", ".mat"}
+        for root in self.get_all_cache_roots():
+            try:
+                for f in root.glob("**/*"):
+                    if f.is_file() and f.suffix.lower() in valid_exts and not f.name.endswith(".partial"):
+                        fname = f.name.lower()
+                        unquoted = urllib.parse.unquote(fname).lower()
+                        if m_lower in fname or m_lower in unquoted:
+                            return True
+                        if patterns and any(p in fname or p in unquoted for p in patterns):
+                            return True
+                        base = m_lower.split("_")[0].split("-")[0]
+                        if len(base) >= 4 and (base in fname or base in unquoted):
+                            return True
+            except Exception:
+                pass
+
         return False
 
     def check_package_installed(self, pkg_name: str) -> bool:

@@ -228,3 +228,55 @@ def test_multi_target_single_eval_worker():
     assert multi_results[SAMPLE_DIST][0].metric_name == "brisque"
 
 
+def test_variable_metrics_diagnostic_warning():
+    from iqa_gui.core.evaluator import is_variable_metric, SingleEvalResult
+
+    # Verify classification of stochastic vs deterministic algorithms
+    assert is_variable_metric("qalign") is True
+    assert is_variable_metric("qalign_8bit") is True
+    assert is_variable_metric("mplug_owl") is True
+    assert is_variable_metric("psnr") is False
+    assert is_variable_metric("ssim") is False
+
+    # Verify that SingleEvalResult diagnostic description includes the warning
+    res_qalign = SingleEvalResult(
+        metric_name="qalign_8bit",
+        metric_mode="NR",
+        score=4.2,
+        lower_better=False,
+        score_range="[1, 5]",
+        time_seconds=0.1,
+        target_path=SAMPLE_DIST,
+    )
+    assert "浮动提醒" in res_qalign.grade_desc
+    assert "多轮测试" in res_qalign.grade_desc
+
+
+def test_multi_round_single_eval_worker():
+    from iqa_gui.core.worker_threads import SingleEvalWorker
+    engine = EvaluatorEngine(device="cpu")
+
+    rounds_results = {}
+
+    def on_rounds_finished(rounds_map):
+        rounds_results.update(rounds_map)
+
+    worker = SingleEvalWorker(
+        evaluator=engine,
+        metrics=["brisque"],
+        target_path=SAMPLE_DIST,
+        rounds=3,
+        auto_release_vram=True,
+    )
+    worker.rounds_finished.connect(on_rounds_finished)
+    worker.run()
+
+    assert len(rounds_results) == 3
+    assert 1 in rounds_results
+    assert 2 in rounds_results
+    assert 3 in rounds_results
+    assert SAMPLE_DIST in rounds_results[1]
+    assert len(rounds_results[1][SAMPLE_DIST]) == 1
+
+
+
