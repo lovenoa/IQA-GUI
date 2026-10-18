@@ -16,16 +16,17 @@ from iqa_gui.core.log_manager import LogManager
 
 
 class SingleEvalWorker(QThread):
-    """Background worker for evaluating single image or image pair across one or multiple metrics."""
+    """Background worker for evaluating single image, image pair, or up to 3 comparison targets."""
     progress = Signal(int, int, str)   # Emits (current_index, total_count, metric_name)
-    finished = Signal(object)          # Emits List[SingleEvalResult]
+    finished = Signal(object)          # Emits List[SingleEvalResult] for active/first target
+    multi_finished = Signal(dict)      # Emits Dict[str, List[SingleEvalResult]]
     error = Signal(str)                # Emits error message
 
     def __init__(
         self,
         evaluator: EvaluatorEngine,
         metrics: Union[str, List[str]],
-        target_path: str,
+        target_path: Union[str, List[str]],
         ref_path: Optional[str] = None,
         prompt: Optional[str] = None,
         auto_release_vram: bool = True,
@@ -37,7 +38,14 @@ class SingleEvalWorker(QThread):
             self.metric_names = [metrics]
         else:
             self.metric_names = list(metrics)
-        self.target_path = target_path
+
+        if isinstance(target_path, list):
+            self.target_paths = list(target_path)
+            self.target_path = self.target_paths[0] if self.target_paths else ""
+        else:
+            self.target_paths = [target_path]
+            self.target_path = target_path
+
         self.ref_path = ref_path
         self.prompt = prompt
         self.auto_release_vram = auto_release_vram
@@ -53,41 +61,55 @@ class SingleEvalWorker(QThread):
         }
         error_occurred = False
         try:
-            results: List[SingleEvalResult] = []
-            total = len(self.metric_names)
-            for idx, m_name in enumerate(self.metric_names, start=1):
+            eval_map: Dict[str, List[SingleEvalResult]] = {}
+            total_steps = len(self.target_paths) * len(self.metric_names)
+            step_counter = 0
+
+            for img_idx, cur_target in enumerate(self.target_paths):
                 if self._is_cancelled:
                     break
-                self.progress.emit(idx, total, m_name)
+                results_this_img: List[SingleEvalResult] = []
 
-                # Determine if reference image is needed for this specific metric
-                model_info = self.evaluator.model_manager.get_model(m_name)
-                need_ref = (model_info.mode == "FR") if model_info else False
-                ref = self.ref_path if need_ref else None
+                for m_name in self.metric_names:
+                    if self._is_cancelled:
+                        break
+                    step_counter += 1
+                    status_hint = (
+                        f"[图 {img_idx+1}/{len(self.target_paths)}] {m_name}"
+                        if len(self.target_paths) > 1
+                        else m_name
+                    )
+                    self.progress.emit(step_counter, total_steps, status_hint)
 
-                res = self.evaluator.evaluate_single(
-                    metric_name=m_name,
-                    target_path=self.target_path,
-                    ref_path=ref,
-                    prompt=self.prompt,
-                )
-                results.append(res)
+                    # Determine if reference image is needed for this specific metric
+                    model_info = self.evaluator.model_manager.get_model(m_name)
+                    need_ref = (model_info.mode == "FR") if model_info else False
+                    ref = self.ref_path if need_ref else None
 
-                # --- STEP-BY-STEP VRAM RELEASE (每一步完成即时释放显存) ---
-                if self.auto_release_vram:
-                    # 开启自动释放时：每一步算完立即卸载该模型并回收显存，确保多算法绝不累加显存
-                    self.evaluator.unload_metric(m_name)
-                    self.evaluator.release_vram(force_unload=False)
-                elif m_name.lower() in heavy_metrics:
-                    # 未开启自动释放时：超大多模态大模型也必须步步卸载，防止8GB显卡瞬时爆满
-                    self.evaluator.unload_metric(m_name)
-                    self.evaluator.release_vram(force_unload=False)
-                else:
-                    # 普通模型保留在缓存以备重用，但及时清空本步计算产生的激活中间张量
-                    self.evaluator.release_vram(force_unload=False)
+                    res = self.evaluator.evaluate_single(
+                        metric_name=m_name,
+                        target_path=cur_target,
+                        ref_path=ref,
+                        prompt=self.prompt,
+                    )
+                    results_this_img.append(res)
+
+                    # --- STEP-BY-STEP VRAM RELEASE (每一步完成即时释放显存) ---
+                    if self.auto_release_vram:
+                        self.evaluator.unload_metric(m_name)
+                        self.evaluator.release_vram(force_unload=False)
+                    elif m_name.lower() in heavy_metrics:
+                        self.evaluator.unload_metric(m_name)
+                        self.evaluator.release_vram(force_unload=False)
+                    else:
+                        self.evaluator.release_vram(force_unload=False)
+
+                eval_map[cur_target] = results_this_img
 
             if not self._is_cancelled:
-                self.finished.emit(results)
+                self.multi_finished.emit(eval_map)
+                primary_results = eval_map.get(self.target_path, [])
+                self.finished.emit(primary_results)
         except Exception as e:
             error_occurred = True
             self.error.emit(str(e))

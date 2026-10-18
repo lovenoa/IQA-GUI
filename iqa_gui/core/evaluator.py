@@ -79,6 +79,142 @@ def patch_mplug_owl_compatibility() -> bool:
 patch_mplug_owl_compatibility()
 
 
+def parse_score_range(score_range_str: Optional[str]) -> Optional[Tuple[float, float]]:
+    """Parse score range string (e.g. '~0, ~1', '0, 100', '-1, 1') into (min_val, max_val)."""
+    if not score_range_str:
+        return None
+    cleaned = str(score_range_str).replace("~", "").replace("[", "").replace("]", "").replace("(", "").replace(")", "").strip()
+    if "," not in cleaned:
+        return None
+    parts = cleaned.split(",")
+    if len(parts) != 2:
+        return None
+    try:
+        min_v = float(parts[0].strip())
+        max_v = float(parts[1].strip())
+        if np.isneginf(min_v) or np.isposinf(max_v) or np.isnan(min_v) or np.isnan(max_v):
+            return None
+        if max_v > min_v:
+            return min_v, max_v
+    except Exception:
+        pass
+    return None
+
+
+def compute_normalized_quality(
+    score: float,
+    score_range_str: Optional[str],
+    lower_better: bool,
+    metric_name: str = "",
+) -> float:
+    """Normalize raw score into unified quality index Q in [0.0, 1.0] (1.0 = best quality)."""
+    m = metric_name.lower().strip()
+    # Metric-specific domain ranges for unbounded or non-standard scores
+    domain_ranges = {
+        "psnr": (15.0, 50.0),
+        "lpips": (0.0, 0.8),
+        "dists": (0.0, 0.8),
+        "clipscore": (10.0, 35.0),
+        "laion_aes": (1.0, 10.0),
+        "musiq": (0.0, 100.0),
+        "ssim": (0.0, 1.0),
+        "fsim": (0.0, 1.0),
+    }
+
+    parsed_range = domain_ranges.get(m) or parse_score_range(score_range_str)
+    if parsed_range is not None:
+        min_v, max_v = parsed_range
+        span = max_v - min_v
+        if span > 1e-6:
+            if lower_better:
+                q = (max_v - score) / span
+            else:
+                q = (score - min_v) / span
+            return float(np.clip(q, 0.0, 1.0))
+
+    # Fallback if range cannot be determined
+    if 0.0 <= score <= 1.0:
+        return float(1.0 - score if lower_better else score)
+    return 0.5
+
+
+def calculate_grade(
+    score: float,
+    normalized_quality: float,
+    metric_name: str = "",
+) -> Tuple[str, str]:
+    """Calculate Grade (S/A/B/C) and descriptive insight for any metric."""
+    m = metric_name.lower().strip()
+    # Domain-specific overrides
+    if m == "laion_aes":
+        if score >= 7.0:
+            return "S", "🌟 【S级 大师级美学】艺术质感极佳，色彩光影绝美，美学水准出众。"
+        elif score >= 6.0:
+            return "A", "✨ 【A级 优质画面】画面干净精致，构图与色调和谐，质感良好。"
+        elif score >= 5.0:
+            return "B", "👌 【B级 达标画质】整体合格，可能存在轻微色彩平淡或局部细节较普通。"
+        else:
+            return "C", "⚠️ 【C级 偏低/瑕疵】美学评分偏低，画面可能存在杂色、暗沉或构图失衡。"
+    elif "clipiqa" in m:
+        if score >= 0.70:
+            return "S", "🌟 【S级 高清精修】纹理细腻，线条清晰锐利，符合高品质视觉先验。"
+        elif score >= 0.55:
+            return "A", "✨ 【A级 良好画质】质感良好，画面层次清晰完整。"
+        elif score >= 0.40:
+            return "B", "👌 【B级 画质一般】细节中规中矩，无明显亮点。"
+        else:
+            return "C", "⚠️ 【C级 线条模糊/噪点】可能存在线条发虚、涂抹感重或局部细节缺失。"
+    elif "musiq" in m:
+        if score >= 70.0:
+            return "S", "🌟 【S级 全局超清】多尺度细节极为丰富，无拉伸或失真损耗。"
+        elif score >= 58.0:
+            return "A", "✨ 【A级 清晰优秀】不同观看尺度下清晰度均维持在较高水准。"
+        elif score >= 45.0:
+            return "B", "👌 【B级 清晰达标】基本满足常规分辨率观看要求。"
+        else:
+            return "C", "⚠️ 【C级 清晰度不足】在全图视角下细节略显软绵或存在压缩失真。"
+    elif m == "maniqa":
+        if score >= 0.65:
+            return "S", "🌟 【S级 结构高度精准】主体边缘与纹理细节感知极为稳定。"
+        elif score >= 0.50:
+            return "A", "✨ 【A级 结构正常】未检测到明显的纹理崩解或严重形变。"
+        elif score >= 0.35:
+            return "B", "👌 【B级 结构可接受】存在轻微不自然线条或伪影。"
+        else:
+            return "C", "⚠️ 【C级 局部可能畸变】建议放大检查主体边缘线条或复杂纹理细节。"
+    elif m == "clipscore":
+        if score >= 28.0:
+            return "S", "🎯 【S级 提示词高契合度】画面内容与文字提示词高度对齐！"
+        elif score >= 22.0:
+            return "A", "👌 【A级 契合度良好】主体内容与提示词相符，修饰细节部分体现。"
+        elif score >= 16.0:
+            return "B", "👌 【B级 契合度尚可】主体符合，细节略有出入。"
+        else:
+            return "C", "⚠️ 【C级 契合度较低】画面内容与提示词存在偏差，存在偏题可能。"
+    elif m == "psnr":
+        tier = "S" if score >= 35.0 else ("A" if score >= 28.0 else ("B" if score >= 20.0 else "C"))
+        return tier, f"峰值信噪比: {score:.2f} dB (全参考)"
+    elif m == "ssim":
+        tier = "S" if score >= 0.95 else ("A" if score >= 0.85 else ("B" if score >= 0.70 else "C"))
+        return tier, f"结构相似度: {score:.4f} (全参考)"
+    elif m == "lpips":
+        tier = "S" if score <= 0.10 else ("A" if score <= 0.25 else ("B" if score <= 0.45 else "C"))
+        return tier, f"深度感知差异: {score:.4f} (全参考)"
+    elif m == "dists":
+        tier = "S" if score <= 0.12 else ("A" if score <= 0.28 else ("B" if score <= 0.48 else "C"))
+        return tier, f"深度纹理与结构相似度: {score:.4f} (全参考)"
+
+    # Universal normalization-based grade calculation
+    if normalized_quality >= 0.85:
+        return "S", "🌟 【S级 卓越画质】归一化画质指数表现顶尖，感知细节与视觉质感极佳。"
+    elif normalized_quality >= 0.70:
+        return "A", "✨ 【A级 优质画面】归一化画质指数良好，画面干净清晰，处于高水准。"
+    elif normalized_quality >= 0.50:
+        return "B", "👌 【B级 达标画质】归一化画质指数处于常规可用范围，满足基本画质要求。"
+    else:
+        return "C", "⚠️ 【C级 表现较弱】归一化画质指数偏低，可能存在可见伪影、模糊或失真。"
+
+
 @dataclass
 class SingleEvalResult:
     """Result of evaluating a single image or image pair."""
@@ -91,6 +227,23 @@ class SingleEvalResult:
     target_path: str
     ref_path: Optional[str] = None
     prompt: Optional[str] = None
+    normalized_quality: float = 0.0
+    grade: str = "B"
+    grade_desc: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.grade_desc:
+            self.normalized_quality = compute_normalized_quality(
+                score=self.score,
+                score_range_str=self.score_range,
+                lower_better=self.lower_better,
+                metric_name=self.metric_name,
+            )
+            self.grade, self.grade_desc = calculate_grade(
+                score=self.score,
+                normalized_quality=self.normalized_quality,
+                metric_name=self.metric_name,
+            )
 
     @property
     def formatted_score(self) -> str:

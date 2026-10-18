@@ -160,3 +160,71 @@ def test_step_by_step_vram_release():
     # When auto_release_vram=True, all metrics must be unloaded step-by-step and at the end
     assert len(engine._loaded_models) == 0
 
+
+def test_score_range_and_normalized_quality():
+    from iqa_gui.core.evaluator import parse_score_range, compute_normalized_quality, calculate_grade, SingleEvalResult
+
+    # 1. Test range parsing
+    assert parse_score_range("~0, ~1") == (0.0, 1.0)
+    assert parse_score_range("0, 100") == (0.0, 100.0)
+    assert parse_score_range("[-1, 1]") == (-1.0, 1.0)
+    assert parse_score_range("~0, ~40") == (0.0, 40.0)
+    assert parse_score_range("invalid") is None
+    assert parse_score_range("~0, ~inf") is None
+    assert parse_score_range(None) is None
+
+    # 2. Test normalized quality computation
+    q_high = compute_normalized_quality(score=38.0, score_range_str="None", lower_better=False, metric_name="psnr")
+    assert 0.0 <= q_high <= 1.0
+    assert q_high > 0.6  # High quality PSNR
+
+    q_low_better = compute_normalized_quality(score=0.08, score_range_str="[0, 1]", lower_better=True, metric_name="lpips")
+    assert q_low_better > 0.8  # Low LPIPS means high quality
+
+    # 3. Test grade calculation
+    grade_s, desc_s = calculate_grade(score=7.5, normalized_quality=0.9, metric_name="laion_aes")
+    assert grade_s == "S"
+    assert "S级" in desc_s
+
+    grade_c, _ = calculate_grade(score=4.0, normalized_quality=0.3, metric_name="laion_aes")
+    assert grade_c == "C"
+
+    # 4. Test SingleEvalResult post-init automatic evaluation
+    res = SingleEvalResult(
+        metric_name="maniqa",
+        metric_mode="NR",
+        score=0.72,
+        lower_better=False,
+        score_range="[0, 1]",
+        time_seconds=0.05,
+        target_path=SAMPLE_DIST,
+    )
+    assert res.grade == "S"
+    assert res.normalized_quality > 0.5
+    assert len(res.grade_desc) > 0
+
+
+def test_multi_target_single_eval_worker():
+    from iqa_gui.core.worker_threads import SingleEvalWorker
+    engine = EvaluatorEngine(device="cpu")
+
+    multi_results = {}
+
+    def on_multi_finished(eval_map):
+        multi_results.update(eval_map)
+
+    worker = SingleEvalWorker(
+        evaluator=engine,
+        metrics=["brisque"],
+        target_path=[SAMPLE_DIST, SAMPLE_DIST],
+        auto_release_vram=True,
+    )
+    worker.multi_finished.connect(on_multi_finished)
+    worker.run()
+
+    assert len(multi_results) == 1  # Deduplicated path key
+    assert SAMPLE_DIST in multi_results
+    assert len(multi_results[SAMPLE_DIST]) == 1
+    assert multi_results[SAMPLE_DIST][0].metric_name == "brisque"
+
+

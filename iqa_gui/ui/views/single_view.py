@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
@@ -24,83 +24,49 @@ from PySide6.QtWidgets import (
 )
 
 from iqa_gui.config import load_settings
-from iqa_gui.core.evaluator import EvaluatorEngine, SingleEvalResult, generate_difference_heatmap
+from iqa_gui.core.evaluator import (
+    EvaluatorEngine,
+    SingleEvalResult,
+    calculate_grade,
+    compute_normalized_quality,
+    generate_difference_heatmap,
+)
 from iqa_gui.core.model_manager import ModelManager
 from iqa_gui.core.worker_threads import SingleEvalWorker
+from iqa_gui.ui.components.compare_dialog import MultiImageCompareDialog
 from iqa_gui.ui.components.image_viewer import ImageViewerCard
 from iqa_gui.ui.components.metric_selector import MetricSelectorWidget
 
 
-def interpret_perceptual_score(metric_name: str, score: float) -> Tuple[str, str]:
+def interpret_perceptual_score(
+    metric_name: str,
+    score: float,
+    score_range: Optional[str] = None,
+    lower_better: bool = False,
+) -> Tuple[str, str]:
     """Provide domain quality rating (Tier, Explanation) for perceptual and aesthetic quality assessment."""
-    m = metric_name.lower()
-    if m == "laion_aes":
-        if score >= 7.0:
-            return "S", "🌟 【S级 大师级美学】艺术质感极佳，色彩光影绝美，美学水准出众。"
-        elif score >= 6.0:
-            return "A", "✨ 【A级 优质画面】画面干净精致，构图与色调和谐，质感良好。"
-        elif score >= 5.0:
-            return "B", "👌 【B级 达标画质】整体合格，可能存在轻微色彩平淡或局部细节较普通。"
-        else:
-            return "C", "⚠️ 【C级 偏低/瑕疵】美学评分偏低，画面可能存在杂色、暗沉或构图失衡。"
-    elif "clipiqa" in m:
-        if score >= 0.70:
-            return "S", "🌟 【S级 高清精修】纹理细腻，线条清晰锐利，符合高品质视觉先验。"
-        elif score >= 0.55:
-            return "A", "✨ 【A级 良好画质】质感良好，画面层次清晰完整。"
-        elif score >= 0.40:
-            return "B", "👌 【B级 画质一般】细节中规中矩，无明显亮点。"
-        else:
-            return "C", "⚠️ 【C级 线条模糊/噪点】可能存在线条发虚、涂抹感重或局部细节缺失。"
-    elif "musiq" in m:
-        if score >= 70.0:
-            return "S", "🌟 【S级 全局超清】多尺度细节极为丰富，无拉伸或失真损耗。"
-        elif score >= 58.0:
-            return "A", "✨ 【A级 清晰优秀】不同观看尺度下清晰度均维持在较高水准。"
-        elif score >= 45.0:
-            return "B", "👌 【B级 清晰达标】基本满足常规分辨率观看要求。"
-        else:
-            return "C", "⚠️ 【C级 清晰度不足】在全图视角下细节略显软绵或存在压缩失真。"
-    elif m == "maniqa":
-        if score >= 0.65:
-            return "S", "🌟 【S级 结构高度精准】主体边缘与纹理细节感知极为稳定。"
-        elif score >= 0.50:
-            return "A", "✨ 【A级 结构正常】未检测到明显的纹理崩解或严重形变。"
-        elif score >= 0.35:
-            return "B", "👌 【B级 结构可接受】存在轻微不自然线条或伪影。"
-        else:
-            return "C", "⚠️ 【C级 局部可能畸变】建议放大检查主体边缘线条或复杂纹理细节。"
-    elif m == "clipscore":
-        if score >= 28.0:
-            return "S", "🎯 【S级 提示词高契合度】画面内容与文字提示词高度对齐！"
-        elif score >= 22.0:
-            return "A", "👌 【A级 契合度良好】主体内容与提示词相符，修饰细节部分体现。"
-        else:
-            return "B", "⚠️ 【B/C级 契合度较低】画面内容与提示词存在偏差，存在偏题可能。"
-    elif m in ["psnr", "ssim", "lpips", "dists", "fsim"]:
-        if m == "psnr":
-            tier = "S" if score >= 35 else ("A" if score >= 28 else "B")
-            return tier, f"峰值信噪比: {score:.2f} dB (全参考)"
-        elif m == "ssim":
-            tier = "S" if score >= 0.95 else ("A" if score >= 0.85 else "B")
-            return tier, f"结构相似度: {score:.4f} (全参考)"
-        elif m == "lpips":
-            tier = "S" if score <= 0.10 else ("A" if score <= 0.25 else "B")
-            return tier, f"深度感知差异: {score:.4f} (全参考)"
-    return "-", "已完成基础画质测算"
+    q = compute_normalized_quality(score, score_range, lower_better, metric_name)
+    return calculate_grade(score, q, metric_name)
+
 
 interpret_anime_aigc_score = interpret_perceptual_score  # 兼容别名
 
 
 class SingleEvalView(QWidget):
-    """View for evaluating a single image (NR) or an image pair (FR) across multiple metrics."""
+    """View for evaluating single images, image pairs, or up to 3 comparison targets."""
 
     def __init__(self, evaluator_engine: EvaluatorEngine, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.evaluator = evaluator_engine
         self.model_manager = ModelManager()
         self.active_worker: Optional[SingleEvalWorker] = None
+
+        # State management
+        self.eval_results_map: Dict[str, List[SingleEvalResult]] = {}
+        self.default_order_results: List[SingleEvalResult] = []
         self.latest_results: List[SingleEvalResult] = []
+        self.sort_state: Optional[Tuple[int, bool]] = None  # (column_index, ascending)
+        self.base_headers = ["算法", "模式", "得分", "倾向", "评级", "指标综合诊断"]
 
         self._init_ui()
 
@@ -136,14 +102,21 @@ class SingleEvalView(QWidget):
         self.prompt_frame.hide()
         left_layout.addWidget(self.prompt_frame)
 
-        # 3. Action Button & Progress Status
+        # 3. Action Buttons & Comparison Trigger
         self.btn_run = QPushButton("🚀 立即开始质量评估")
         self.btn_run.setProperty("class", "PrimaryButton")
         self.btn_run.setMinimumHeight(34)
         self.btn_run.clicked.connect(self.run_evaluation)
         left_layout.addWidget(self.btn_run)
 
-        # 4. Result Scorecard Panel (High density table + explanation)
+        self.btn_open_compare = QPushButton("📊 打开多图横向比对报表 (PK 模式)")
+        self.btn_open_compare.setProperty("class", "SecondaryButton")
+        self.btn_open_compare.setMinimumHeight(32)
+        self.btn_open_compare.clicked.connect(self.open_comparison_dialog)
+        self.btn_open_compare.hide()
+        left_layout.addWidget(self.btn_open_compare)
+
+        # 4. Result Scorecard Panel (High density table + sorting + explanation)
         self.result_card = QFrame()
         self.result_card.setProperty("class", "CardFrame")
         card_layout = QVBoxLayout(self.result_card)
@@ -161,17 +134,18 @@ class SingleEvalView(QWidget):
 
         # Multi-metric results table
         self.table_scorecard = QTableWidget(self)
-        self.table_scorecard.setColumnCount(6)
-        self.table_scorecard.setHorizontalHeaderLabels(["算法", "模式", "得分", "倾向", "评级", "指标综合诊断"])
+        self.table_scorecard.setColumnCount(len(self.base_headers))
+        self.table_scorecard.setHorizontalHeaderLabels(self.base_headers)
         self.table_scorecard.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_scorecard.horizontalHeader().setStretchLastSection(True)
         self.table_scorecard.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table_scorecard.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table_scorecard.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
         self.table_scorecard.itemSelectionChanged.connect(self._on_table_selection_changed)
         card_layout.addWidget(self.table_scorecard, 3)
 
         # Explanation / Guidance banner
-        self.lbl_explanation = QLabel("提示: 评估完成后点击上方表格中的算法行，可在此查看该算法的技术原理与公式依据。")
+        self.lbl_explanation = QLabel("提示: 评估完成后点击上方表格中的算法行，可在此查看该算法的技术原理与公式依据。点击表头可正序/倒序/默认排序。")
         self.lbl_explanation.setProperty("class", "InfoBanner")
         self.lbl_explanation.setWordWrap(True)
         card_layout.addWidget(self.lbl_explanation)
@@ -188,8 +162,20 @@ class SingleEvalView(QWidget):
         side_layout.setContentsMargins(4, 4, 4, 4)
         side_layout.setSpacing(6)
 
-        self.viewer_target = ImageViewerCard(title="待评测目标图像 (Target)", placeholder_text="拖入待评估图像或点击右上角选择文件")
-        self.viewer_ref = ImageViewerCard(title="基准参考图像 (Reference)", placeholder_text="全参考(FR)模式需提供无失真原图 (无参考模式自动隐藏)")
+        # Target viewer supports multi-image comparison (up to 3 images)
+        self.viewer_target = ImageViewerCard(
+            title="待评测目标图像 (Target)",
+            placeholder_text="拖入待评估图像或点击选择 (支持最多3张对比)",
+            multi_image_mode=True,
+        )
+        self.viewer_target.image_changed.connect(self._on_target_image_changed)
+        self.viewer_target.images_updated.connect(self._on_target_images_updated)
+
+        self.viewer_ref = ImageViewerCard(
+            title="基准参考图像 (Reference)",
+            placeholder_text="全参考(FR)模式需提供无失真原图 (无参考模式自动隐藏)",
+            multi_image_mode=False,
+        )
 
         # Synchronize pan and zoom between Target and Reference
         self.viewer_target.sync_requested.connect(self.viewer_ref.sync_from)
@@ -203,7 +189,11 @@ class SingleEvalView(QWidget):
         tab_diff = QWidget()
         diff_layout = QVBoxLayout(tab_diff)
         diff_layout.setContentsMargins(4, 4, 4, 4)
-        self.viewer_diff = ImageViewerCard(title="像素级差异热力图 (Difference Heatmap)", placeholder_text="生成全参考评估后自动渲染差异分布")
+        self.viewer_diff = ImageViewerCard(
+            title="像素级差异热力图 (Difference Heatmap)",
+            placeholder_text="生成全参考评估后自动渲染差异分布",
+            multi_image_mode=False,
+        )
         diff_layout.addWidget(self.viewer_diff)
         self.tabs_view.addTab(tab_diff, "🔥 差异分布热力图 (Difference)")
 
@@ -218,14 +208,12 @@ class SingleEvalView(QWidget):
 
     def _on_metric_changed(self, selected: list) -> None:
         """Handle selection change in metric selector."""
-        # Toggle prompt input if clipscore is in selected metrics
         has_clipscore = any(m.lower() == "clipscore" for m in selected)
         if has_clipscore:
             self.prompt_frame.show()
         else:
             self.prompt_frame.hide()
 
-        # Check if any selected metric is Full Reference (FR)
         has_fr = False
         for m_name in selected:
             info = self.model_manager.get_model(m_name)
@@ -246,20 +234,240 @@ class SingleEvalView(QWidget):
             self.tabs_view.setTabText(0, "🖼️ 单图无参考深度画布 (Target)")
             self.tabs_view.setTabEnabled(1, False)
 
+    def _on_target_image_changed(self, target_path: str) -> None:
+        """Called when user selects a different image tab in target viewer."""
+        if not target_path or target_path not in self.eval_results_map:
+            self.default_order_results = []
+            self.latest_results = []
+            self.sort_state = None
+            self._apply_sorting_and_render()
+            if target_path:
+                fname = os.path.basename(target_path)
+                self.lbl_eval_status.setText(f"已选中 [{fname}] (尚未评估，点击开始评估)")
+            else:
+                self.lbl_eval_status.setText("就绪: 拖入图片后点击评估")
+            return
+
+        self.default_order_results = list(self.eval_results_map[target_path])
+        self.sort_state = None
+        self._apply_sorting_and_render()
+        fname = os.path.basename(target_path)
+        self.lbl_eval_status.setText(f"展示中: [{fname}] (共 {len(self.default_order_results)} 项算法)")
+
+    def _on_target_images_updated(self, paths: List[str]) -> None:
+        """Called when images are added or removed from target canvas."""
+        existing_keys = list(self.eval_results_map.keys())
+        for k in existing_keys:
+            if k not in paths:
+                del self.eval_results_map[k]
+
+        evaluated_count = len(self.eval_results_map)
+        if evaluated_count >= 2:
+            self.btn_open_compare.show()
+            self.btn_open_compare.setEnabled(True)
+            self.btn_open_compare.setText(f"📊 打开多图横向比对报表 ({evaluated_count} 张图片 PK)")
+        else:
+            self.btn_open_compare.hide()
+            self.btn_open_compare.setEnabled(False)
+
+    def open_comparison_dialog(self) -> None:
+        """Open the multi-image comparison PK report dialog."""
+        if len(self.eval_results_map) < 2:
+            QMessageBox.information(self, "对比提示", "请至少评测 2 张待测图片后再查看横向比对报表。")
+            return
+        paths = [p for p in self.viewer_target.get_image_paths() if p in self.eval_results_map]
+        dlg = MultiImageCompareDialog(paths, self.eval_results_map, self)
+        dlg.exec()
+
+    def _on_header_section_clicked(self, logical_index: int) -> None:
+        """Handle header click for 3-state cycling: Descending -> Ascending -> Default order."""
+        if not self.default_order_results:
+            return
+
+        if self.sort_state is None or self.sort_state[0] != logical_index:
+            self.sort_state = (logical_index, False)  # Descending
+        elif self.sort_state == (logical_index, False):
+            self.sort_state = (logical_index, True)   # Ascending
+        else:
+            self.sort_state = None                   # Reset to default order
+
+        self._apply_sorting_and_render()
+
+    def _apply_sorting_and_render(self) -> None:
+        """Sort and render scorecard table based on current sort_state."""
+        if not self.default_order_results:
+            self.latest_results = []
+            self.table_scorecard.setRowCount(0)
+            self._update_header_labels()
+            return
+
+        if self.sort_state is None:
+            sorted_results = list(self.default_order_results)
+        else:
+            col_idx, ascending = self.sort_state
+            if col_idx == 0:
+                # 算法: Alphabetical order
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: r.metric_name.lower(),
+                    reverse=(not ascending),
+                )
+            elif col_idx == 1:
+                # 模式: FR vs NR
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: r.metric_mode,
+                    reverse=(not ascending),
+                )
+            elif col_idx == 2:
+                # 得分: Normalized quality index Q in [0, 1]
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: r.normalized_quality,
+                    reverse=(not ascending),
+                )
+            elif col_idx == 3:
+                # 倾向: 越高越好 vs 越低越好
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: 1 if r.lower_better else 0,
+                    reverse=(not ascending),
+                )
+            elif col_idx == 4:
+                # 评级: Grade rank S(4) > A(3) > B(2) > C(1)
+                tier_order = {"S": 4, "A": 3, "B": 2, "C": 1}
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: tier_order.get(r.grade, 0),
+                    reverse=(not ascending),
+                )
+            elif col_idx == 5:
+                # 指标综合诊断
+                sorted_results = sorted(
+                    self.default_order_results,
+                    key=lambda r: r.grade_desc,
+                    reverse=(not ascending),
+                )
+            else:
+                sorted_results = list(self.default_order_results)
+
+        self.latest_results = sorted_results
+        self._update_header_labels()
+        self._render_scorecard_rows()
+
+    def _update_header_labels(self) -> None:
+        """Update column headers with sorting indicator arrows."""
+        headers = []
+        for i, title in enumerate(self.base_headers):
+            if self.sort_state is not None and self.sort_state[0] == i:
+                arrow = " ▲" if self.sort_state[1] else " ▼"
+                headers.append(f"{title}{arrow}")
+            else:
+                headers.append(title)
+        self.table_scorecard.setHorizontalHeaderLabels(headers)
+
+    def _render_scorecard_rows(self) -> None:
+        """Render rows into scorecard table."""
+        total = len(self.latest_results)
+        self.table_scorecard.setRowCount(total)
+
+        s_count = 0
+        a_count = 0
+        fr_result_for_heatmap: Optional[SingleEvalResult] = None
+
+        for row_idx, res in enumerate(self.latest_results):
+            # Col 0: Metric Name
+            item_name = QTableWidgetItem(res.metric_name)
+            item_name.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            self.table_scorecard.setItem(row_idx, 0, item_name)
+
+            # Col 1: Mode
+            item_mode = QTableWidgetItem(res.metric_mode)
+            item_mode.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_scorecard.setItem(row_idx, 1, item_mode)
+
+            # Col 2: Score
+            item_score = QTableWidgetItem(res.formatted_score)
+            item_score.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_scorecard.setItem(row_idx, 2, item_score)
+
+            # Col 3: Direction
+            dir_str = "▼ 越低越好" if res.lower_better else "▲ 越高越好"
+            item_dir = QTableWidgetItem(dir_str)
+            item_dir.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table_scorecard.setItem(row_idx, 3, item_dir)
+
+            # Col 4: Tier badge
+            tier = res.grade
+            insight = res.grade_desc
+            lbl_tier = QLabel(f" {tier}级 ")
+            lbl_tier.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if tier == "S":
+                lbl_tier.setProperty("class", "TierS")
+                s_count += 1
+            elif tier == "A":
+                lbl_tier.setProperty("class", "TierA")
+                a_count += 1
+            elif tier == "B":
+                lbl_tier.setProperty("class", "TierB")
+            else:
+                lbl_tier.setProperty("class", "TierC")
+            self.table_scorecard.setCellWidget(row_idx, 4, lbl_tier)
+
+            # Col 5: Insight
+            item_insight = QTableWidgetItem(insight)
+            item_insight.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            self.table_scorecard.setItem(row_idx, 5, item_insight)
+
+            if res.metric_mode == "FR" and res.ref_path:
+                fr_result_for_heatmap = res
+
+        for c in range(5):
+            self.table_scorecard.resizeColumnToContents(c)
+
+        if total > 0:
+            self.table_scorecard.selectRow(0)
+            overall_text = "🌟 综合评级：S 级 (卓越画质，光影美学与细节表现极佳)" if s_count >= 2 else (
+                "✨ 综合评级：A 级 (优质水准，细节良好，无明显结构瑕疵)" if (s_count + a_count) >= 2 else
+                "👌 综合评级：B 级 (整体合格，建议关注局部微小噪点或模糊)"
+            )
+            first_res = self.latest_results[0]
+            info = self.model_manager.get_model(first_res.metric_name)
+            desc = info.description_zh if info else ""
+            self.lbl_explanation.setText(f"{overall_text}\n\n【{first_res.metric_name.upper()} 原理】{desc}")
+
+        if fr_result_for_heatmap and fr_result_for_heatmap.ref_path:
+            try:
+                diff_pil = generate_difference_heatmap(
+                    fr_result_for_heatmap.target_path,
+                    fr_result_for_heatmap.ref_path,
+                )
+                data = diff_pil.tobytes("raw", "RGB")
+                qimg = QImage(data, diff_pil.width, diff_pil.height, diff_pil.width * 3, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qimg)
+                self.viewer_diff.display_pixmap(pixmap)
+            except Exception as e:
+                print(f"Error rendering difference heatmap: {e}")
+
     def run_evaluation(self) -> None:
-        """Trigger multi-metric evaluation."""
+        """Trigger multi-metric evaluation across all loaded target images."""
         selected = self.metric_selector.get_selected()
         if not selected:
             QMessageBox.warning(self, "请选择算法", "请先在左侧选择至少一种图像质量评估算法。")
             return
 
-        tar_path = self.viewer_target.current_file_path
+        target_paths = self.viewer_target.get_image_paths()
         ref_path = self.viewer_ref.current_file_path
         prompt = self.edit_prompt.text().strip()
 
-        if not tar_path or not os.path.exists(tar_path):
+        if not target_paths:
             QMessageBox.warning(self, "缺少图像", "请先选择或拖入待评测目标图像！")
             return
+
+        for p in target_paths:
+            if not os.path.exists(p):
+                QMessageBox.warning(self, "文件丢失", f"待测图像路径不存在:\n{p}")
+                return
 
         # Check if any FR metric is selected without reference image
         for m_name in selected:
@@ -287,7 +495,8 @@ class SingleEvalView(QWidget):
         # Prepare UI
         self.btn_run.setEnabled(False)
         self.btn_run.setText("⏳ 正在计算中...")
-        self.lbl_eval_status.setText(f"正在计算 1/{len(selected)}: {selected[0]} ...")
+        total_evals = len(target_paths) * len(selected)
+        self.lbl_eval_status.setText(f"正在计算 (1/{total_evals}) ...")
         self.lbl_explanation.setText("正在执行深度学习算法评估，请稍候...")
         self.table_scorecard.setRowCount(0)
 
@@ -298,12 +507,13 @@ class SingleEvalView(QWidget):
         self.active_worker = SingleEvalWorker(
             evaluator=self.evaluator,
             metrics=selected,
-            target_path=tar_path,
+            target_path=target_paths,
             ref_path=ref_path,
             prompt=prompt,
             auto_release_vram=auto_release,
         )
         self.active_worker.progress.connect(self._on_worker_progress)
+        self.active_worker.multi_finished.connect(self._on_multi_eval_finished)
         self.active_worker.finished.connect(self._on_eval_finished)
         self.active_worker.error.connect(self._on_eval_error)
         self.active_worker.start()
@@ -311,97 +521,35 @@ class SingleEvalView(QWidget):
     def _on_worker_progress(self, current: int, total: int, metric_name: str) -> None:
         self.lbl_eval_status.setText(f"正在计算 ({current}/{total}): {metric_name} ...")
 
+    def _on_multi_eval_finished(self, eval_map: Dict[str, List[SingleEvalResult]]) -> None:
+        """Handle evaluation completion for all targets."""
+        self.eval_results_map.update(eval_map)
+        evaluated_count = len(self.eval_results_map)
+        if evaluated_count >= 2:
+            self.btn_open_compare.show()
+            self.btn_open_compare.setEnabled(True)
+            self.btn_open_compare.setText(f"📊 打开多图横向比对报表 ({evaluated_count} 张图片 PK)")
+        else:
+            self.btn_open_compare.hide()
+            self.btn_open_compare.setEnabled(False)
+
     def _on_eval_finished(self, results: List[SingleEvalResult]) -> None:
+        """Handle evaluation completion."""
         self.btn_run.setEnabled(True)
         self.btn_run.setText("🚀 立即开始质量评估")
-        self.latest_results = results
 
-        total = len(results)
-        self.lbl_eval_status.setText(f"评估完成: 共 {total} 项算法")
-        self.table_scorecard.setRowCount(total)
+        cur_target = self.viewer_target.current_file_path
+        if cur_target and cur_target in self.eval_results_map:
+            self.default_order_results = list(self.eval_results_map[cur_target])
+        else:
+            self.default_order_results = list(results)
 
-        s_count = 0
-        a_count = 0
-        fr_result_for_heatmap: Optional[SingleEvalResult] = None
+        self.sort_state = None
+        self._apply_sorting_and_render()
 
-        for row_idx, res in enumerate(results):
-            # Column 0: Metric Name
-            item_name = QTableWidgetItem(res.metric_name)
-            item_name.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            self.table_scorecard.setItem(row_idx, 0, item_name)
-
-            # Column 1: Mode
-            item_mode = QTableWidgetItem(res.metric_mode)
-            item_mode.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table_scorecard.setItem(row_idx, 1, item_mode)
-
-            # Column 2: Score
-            item_score = QTableWidgetItem(res.formatted_score)
-            item_score.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table_scorecard.setItem(row_idx, 2, item_score)
-
-            # Column 3: Direction
-            dir_str = "▼ 越低越好" if res.lower_better else "▲ 越高越好"
-            item_dir = QTableWidgetItem(dir_str)
-            item_dir.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table_scorecard.setItem(row_idx, 3, item_dir)
-
-            # Column 4: Tier badge
-            tier, insight = interpret_anime_aigc_score(res.metric_name, res.score)
-            lbl_tier = QLabel(f" {tier}级 ")
-            lbl_tier.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if tier == "S":
-                lbl_tier.setProperty("class", "TierS")
-                s_count += 1
-            elif tier == "A":
-                lbl_tier.setProperty("class", "TierA")
-                a_count += 1
-            elif tier == "B":
-                lbl_tier.setProperty("class", "TierB")
-            else:
-                lbl_tier.setProperty("class", "TierC")
-            self.table_scorecard.setCellWidget(row_idx, 4, lbl_tier)
-
-            # Column 5: Anime/AIGC Insight
-            item_insight = QTableWidgetItem(insight)
-            item_insight.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            self.table_scorecard.setItem(row_idx, 5, item_insight)
-
-            if res.metric_mode == "FR" and res.ref_path:
-                fr_result_for_heatmap = res
-
-        # Resize columns cleanly
-        self.table_scorecard.resizeColumnToContents(0)
-        self.table_scorecard.resizeColumnToContents(1)
-        self.table_scorecard.resizeColumnToContents(2)
-        self.table_scorecard.resizeColumnToContents(3)
-        self.table_scorecard.resizeColumnToContents(4)
-
-        # Select first row by default to trigger explanation display
-        if total > 0:
-            self.table_scorecard.selectRow(0)
-            overall_text = "🌟 综合评级：S 级 (卓越画质，光影美学与细节表现极佳)" if s_count >= 2 else (
-                "✨ 综合评级：A 级 (优质水准，细节良好，无明显结构瑕疵)" if (s_count + a_count) >= 2 else
-                "👌 综合评级：B 级 (整体合格，建议关注局部微小噪点或模糊)"
-            )
-            first_res = results[0]
-            info = self.model_manager.get_model(first_res.metric_name)
-            desc = info.description_zh if info else ""
-            self.lbl_explanation.setText(f"{overall_text}\n\n【{first_res.metric_name.upper()} 原理】{desc}")
-
-        # Render difference heatmap if any FR metric was evaluated with reference
-        if fr_result_for_heatmap and fr_result_for_heatmap.ref_path:
-            try:
-                diff_pil = generate_difference_heatmap(
-                    fr_result_for_heatmap.target_path,
-                    fr_result_for_heatmap.ref_path,
-                )
-                data = diff_pil.tobytes("raw", "RGB")
-                qimg = QImage(data, diff_pil.width, diff_pil.height, diff_pil.width * 3, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(qimg)
-                self.viewer_diff.display_pixmap(pixmap)
-            except Exception as e:
-                print(f"Error rendering difference heatmap: {e}")
+        fname = os.path.basename(cur_target) if cur_target else "目标图像"
+        total = len(self.default_order_results)
+        self.lbl_eval_status.setText(f"评估完成: 当前查看 [{fname}] (共 {total} 项算法)")
 
         # Refresh VRAM status on main window
         main_win = self.window()
@@ -418,10 +566,10 @@ class SingleEvalView(QWidget):
             res = self.latest_results[row]
             info = self.model_manager.get_model(res.metric_name)
             desc = info.description_zh if info else ""
-            _, insight = interpret_perceptual_score(res.metric_name, res.score)
             self.lbl_explanation.setText(
-                f"【{res.metric_name.upper()} 评估结果: {res.formatted_score} ({res.direction_hint})】\n"
-                f"{insight}\n\n"
+                f"【{res.metric_name.upper()} 评估结果: {res.formatted_score} ({res.direction_hint}) | {res.grade}级】\n"
+                f"{res.grade_desc}\n\n"
+                f"【标准化质量指数】{res.normalized_quality * 100:.1f} / 100\n\n"
                 f"【算法原理】{desc}"
             )
 

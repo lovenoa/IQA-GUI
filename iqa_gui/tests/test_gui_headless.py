@@ -214,4 +214,148 @@ def test_vram_and_auto_release_gui():
     assert window.auto_release_vram is True
 
 
+def test_scorecard_table_sorting():
+    from iqa_gui.core.evaluator import SingleEvalResult
+    window = MainWindow()
+    view = window.view_single
+
+    r_laion = SingleEvalResult(
+        metric_name="laion_aes",
+        metric_mode="NR",
+        score=6.2,
+        lower_better=False,
+        score_range="[1, 10]",
+        time_seconds=0.1,
+        target_path=SAMPLE_DIST,
+    )
+    r_psnr = SingleEvalResult(
+        metric_name="psnr",
+        metric_mode="FR",
+        score=37.5,
+        lower_better=False,
+        score_range="[0, 50]",
+        time_seconds=0.1,
+        target_path=SAMPLE_DIST,
+        ref_path=SAMPLE_REF,
+    )
+    r_brisque = SingleEvalResult(
+        metric_name="brisque",
+        metric_mode="NR",
+        score=75.0,
+        lower_better=True,
+        score_range="[0, 100]",
+        time_seconds=0.1,
+        target_path=SAMPLE_DIST,
+    )
+
+    view._on_eval_finished([r_laion, r_psnr, r_brisque])
+    assert view.table_scorecard.rowCount() == 3
+
+    # Test Column 0 ("算法") tri-state sorting: Descending -> Ascending -> Default
+    view._on_header_section_clicked(0)
+    assert view.sort_state == (0, False)  # Descending
+    names_desc = [view.latest_results[i].metric_name for i in range(3)]
+    assert names_desc == ["psnr", "laion_aes", "brisque"]
+
+    view._on_header_section_clicked(0)
+    assert view.sort_state == (0, True)   # Ascending
+    names_asc = [view.latest_results[i].metric_name for i in range(3)]
+    assert names_asc == ["brisque", "laion_aes", "psnr"]
+
+    view._on_header_section_clicked(0)
+    assert view.sort_state is None        # Default order
+    names_def = [view.latest_results[i].metric_name for i in range(3)]
+    assert names_def == ["laion_aes", "psnr", "brisque"]
+
+    # Test Column 4 ("评级") sorting: Descending should put S first
+    view._on_header_section_clicked(4)
+    assert view.latest_results[0].grade == "S"  # psnr (37.5 dB) has grade S
+
+
+def test_image_viewer_multi_image_mode():
+    from iqa_gui.ui.components.image_viewer import ImageViewerCard
+    card = ImageViewerCard(title="多图待测", multi_image_mode=True)
+    assert card.multi_image_mode is True
+
+    # 1. Add images
+    card.add_images([SAMPLE_DIST, SAMPLE_REF])
+    assert len(card.get_image_paths()) == 2
+    assert card.active_index == 1
+
+    # 2. Add 3rd image and attempt exceeding max 3
+    card.add_images([SAMPLE_DIST])  # duplicate path should be ignored
+    assert len(card.get_image_paths()) == 2
+
+    # 3. Select image at 0
+    card.select_image_at(0)
+    assert card.active_index == 0
+    assert card.current_file_path == SAMPLE_DIST
+
+    # 4. Remove image
+    card.remove_image_at(0)
+    assert len(card.get_image_paths()) == 1
+    assert card.current_file_path == SAMPLE_REF
+
+    # 5. Clear all images
+    card.clear_all_images()
+    assert len(card.get_image_paths()) == 0
+    assert card.current_file_path is None
+
+
+def test_multi_image_compare_dialog():
+    import tempfile
+    from iqa_gui.core.evaluator import SingleEvalResult
+    from iqa_gui.ui.components.compare_dialog import MultiImageCompareDialog
+
+    r1 = SingleEvalResult(
+        metric_name="psnr",
+        metric_mode="FR",
+        score=32.0,
+        lower_better=False,
+        score_range="[0, 50]",
+        time_seconds=0.1,
+        target_path=SAMPLE_DIST,
+    )
+    r2 = SingleEvalResult(
+        metric_name="psnr",
+        metric_mode="FR",
+        score=38.0,
+        lower_better=False,
+        score_range="[0, 50]",
+        time_seconds=0.1,
+        target_path=SAMPLE_REF,
+    )
+    eval_map = {
+        SAMPLE_DIST: [r1],
+        SAMPLE_REF: [r2],
+    }
+
+    dlg = MultiImageCompareDialog([SAMPLE_DIST, SAMPLE_REF], eval_map)
+    assert dlg.table_compare.rowCount() == 1
+    # Check winner column has trophy and points to Image 2 (higher PSNR)
+    winner_item = dlg.table_compare.item(0, 5)
+    assert "🏆 图 2 优胜" in winner_item.text()
+
+    # Test clipboard copy method
+    copy_text = dlg._copy_to_clipboard()
+    assert "psnr" in copy_text.lower()
+    assert "🏆 图 2 优胜" in copy_text
+
+    # Test CSV export
+    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
+        csv_path = tf.name
+    try:
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            import csv
+            writer = csv.writer(f)
+            writer.writerow(dlg.col_headers)
+            row_vals = [dlg.table_compare.item(0, c).text() for c in range(dlg.table_compare.columnCount())]
+            writer.writerow(row_vals)
+        assert os.path.getsize(csv_path) > 0
+    finally:
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+
+
+
 
