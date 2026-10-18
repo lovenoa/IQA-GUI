@@ -39,7 +39,7 @@ class MultiImageCompareDialog(QDialog):
         self.image_paths = [p for p in image_paths if p in eval_results_map]
         self.eval_results_map = eval_results_map
 
-        self.setWindowTitle("📊 多图画质横向比对 PK 报表")
+        self.setWindowTitle("多图画质横向比对 PK 报表")
         self.resize(1050, 680)
         self.setMinimumSize(850, 500)
 
