@@ -184,7 +184,7 @@ def test_score_range_and_normalized_quality():
     # 3. Test grade calculation
     grade_s, desc_s = calculate_grade(score=7.5, normalized_quality=0.9, metric_name="laion_aes")
     assert grade_s == "S"
-    assert "S级" in desc_s
+    assert "美学" in desc_s
 
     grade_c, _ = calculate_grade(score=4.0, normalized_quality=0.3, metric_name="laion_aes")
     assert grade_c == "C"
@@ -248,8 +248,7 @@ def test_variable_metrics_diagnostic_warning():
         time_seconds=0.1,
         target_path=SAMPLE_DIST,
     )
-    assert "浮动提醒" in res_qalign.grade_desc
-    assert "多轮测试" in res_qalign.grade_desc
+    assert "易浮动" in res_qalign.grade_desc
 
 
 def test_multi_round_single_eval_worker():

@@ -108,44 +108,42 @@ class SingleEvalView(QWidget):
         self.prompt_frame.hide()
         left_layout.addWidget(self.prompt_frame)
 
-        # 3. Multi-Round Settings Row
-        round_cfg_row = QHBoxLayout()
-        self.chk_multi_round = QCheckBox("启用多轮重复测试 (检验算法稳定性)")
-        self.chk_multi_round.setToolTip("勾选后将对选定算法重复执行指定轮数，以评估随机性、极差与均值")
+        # 3. Action & Multi-Round Row
+        run_row = QHBoxLayout()
+        self.btn_run = QPushButton("开始评估")
+        self.btn_run.setProperty("class", "PrimaryButton")
+        self.btn_run.setMinimumHeight(32)
+        self.btn_run.clicked.connect(self.run_evaluation)
+        run_row.addWidget(self.btn_run, 1)
+
+        self.chk_multi_round = QCheckBox("启用多轮")
+        self.chk_multi_round.setToolTip("重复执行指定轮数，统计极差、标准差与均值")
         self.spin_rounds = QSpinBox()
         self.spin_rounds.setRange(2, 20)
         self.spin_rounds.setValue(3)
-        self.spin_rounds.setPrefix("重复 ")
-        self.spin_rounds.setSuffix(" 轮")
+        self.spin_rounds.setSuffix(" 次")
+        self.spin_rounds.setFixedWidth(68)
         self.spin_rounds.setEnabled(False)
         self.chk_multi_round.toggled.connect(self.spin_rounds.setEnabled)
-        round_cfg_row.addWidget(self.chk_multi_round)
-        round_cfg_row.addWidget(self.spin_rounds)
-        round_cfg_row.addStretch()
-        left_layout.addLayout(round_cfg_row)
+        run_row.addWidget(self.chk_multi_round)
+        run_row.addWidget(self.spin_rounds)
+        left_layout.addLayout(run_row)
 
-        # 4. Action Buttons & Comparison/Multi-round Triggers
-        self.btn_run = QPushButton("🚀 立即开始质量评估")
-        self.btn_run.setProperty("class", "PrimaryButton")
-        self.btn_run.setMinimumHeight(34)
-        self.btn_run.clicked.connect(self.run_evaluation)
-        left_layout.addWidget(self.btn_run)
-
-        self.btn_open_compare = QPushButton("📊 打开多图横向比对报表 (PK 模式)")
+        self.btn_open_compare = QPushButton("打开多图对比报表")
         self.btn_open_compare.setProperty("class", "SecondaryButton")
-        self.btn_open_compare.setMinimumHeight(32)
+        self.btn_open_compare.setMinimumHeight(30)
         self.btn_open_compare.clicked.connect(self.open_comparison_dialog)
         self.btn_open_compare.hide()
         left_layout.addWidget(self.btn_open_compare)
 
-        self.btn_open_multi_round = QPushButton("📈 查看多轮测试统计聚合报表 (极差/标准差/均值)")
+        self.btn_open_multi_round = QPushButton("查看多轮统计报表")
         self.btn_open_multi_round.setProperty("class", "SecondaryButton")
-        self.btn_open_multi_round.setMinimumHeight(32)
+        self.btn_open_multi_round.setMinimumHeight(30)
         self.btn_open_multi_round.clicked.connect(self.open_multi_round_dialog)
         self.btn_open_multi_round.hide()
         left_layout.addWidget(self.btn_open_multi_round)
 
-        # 5. Result Scorecard Panel (High density table + sorting + explanation)
+        # 4. Result Scorecard Panel
         self.result_card = QFrame()
         self.result_card.setProperty("class", "CardFrame")
         card_layout = QVBoxLayout(self.result_card)
@@ -153,8 +151,8 @@ class SingleEvalView(QWidget):
         card_layout.setSpacing(4)
 
         header_res = QHBoxLayout()
-        self.lbl_result_title = QLabel("<b>综合画质体检看板 (Quality Scorecard)</b>")
-        self.lbl_eval_status = QLabel("就绪: 拖入图片后点击评估")
+        self.lbl_result_title = QLabel("<b>评估结果看板</b>")
+        self.lbl_eval_status = QLabel("就绪")
         self.lbl_eval_status.setProperty("class", "MutedText")
         header_res.addWidget(self.lbl_result_title)
         header_res.addStretch()
@@ -173,6 +171,14 @@ class SingleEvalView(QWidget):
         header_res.addWidget(self.round_switch_widget)
 
         header_res.addWidget(self.lbl_eval_status)
+
+        # Button to restore preview when hidden
+        self.btn_show_preview = QPushButton("展开预览")
+        self.btn_show_preview.setToolTip("重新展开右侧图像预览画布")
+        self.btn_show_preview.clicked.connect(lambda: self.set_preview_visible(True))
+        self.btn_show_preview.hide()
+        header_res.addWidget(self.btn_show_preview)
+
         card_layout.addLayout(header_res)
 
         # Multi-metric results table
@@ -226,19 +232,25 @@ class SingleEvalView(QWidget):
 
         side_layout.addWidget(self.viewer_target, 1)
         side_layout.addWidget(self.viewer_ref, 1)
-        self.tabs_view.addTab(tab_side, "🔍 双图联动同步比对 (Side-by-Side)")
+        self.tabs_view.addTab(tab_side, "图像预览 (Preview)")
 
         # Tab 2: Difference heatmap
         tab_diff = QWidget()
         diff_layout = QVBoxLayout(tab_diff)
         diff_layout.setContentsMargins(4, 4, 4, 4)
         self.viewer_diff = ImageViewerCard(
-            title="像素级差异热力图 (Difference Heatmap)",
+            title="差异分布 (Difference Heatmap)",
             placeholder_text="生成全参考评估后自动渲染差异分布",
             multi_image_mode=False,
         )
         diff_layout.addWidget(self.viewer_diff)
-        self.tabs_view.addTab(tab_diff, "🔥 差异分布热力图 (Difference)")
+        self.tabs_view.addTab(tab_diff, "差异分布 (Difference)")
+
+        # Close preview button on the top-right corner of preview tabs
+        self.btn_close_preview = QPushButton("关闭预览")
+        self.btn_close_preview.setToolTip("隐藏图像预览画布，最大化查看结果看板")
+        self.btn_close_preview.clicked.connect(lambda: self.set_preview_visible(False))
+        self.tabs_view.setCornerWidget(self.btn_close_preview, Qt.Corner.TopRightCorner)
 
         splitter.addWidget(self.tabs_view)
         splitter.setStretchFactor(0, 4)
@@ -248,6 +260,11 @@ class SingleEvalView(QWidget):
 
         # Default: Select anime & AIGC preset algorithms
         self.metric_selector.select_anime_presets()
+
+    def set_preview_visible(self, visible: bool) -> None:
+        """Toggle preview panel visibility to maximize results."""
+        self.tabs_view.setVisible(visible)
+        self.btn_show_preview.setVisible(not visible)
 
     def _on_metric_changed(self, selected: list) -> None:
         """Handle selection change in metric selector."""
@@ -628,7 +645,7 @@ class SingleEvalView(QWidget):
         if evaluated_count >= 2:
             self.btn_open_compare.show()
             self.btn_open_compare.setEnabled(True)
-            self.btn_open_compare.setText(f"📊 打开多图横向比对报表 ({evaluated_count} 张图片 PK)")
+            self.btn_open_compare.setText(f"打开多图对比报表 ({evaluated_count} 张图片 PK)")
         else:
             self.btn_open_compare.hide()
             self.btn_open_compare.setEnabled(False)
@@ -636,7 +653,7 @@ class SingleEvalView(QWidget):
     def _on_eval_finished(self, results: List[SingleEvalResult]) -> None:
         """Handle evaluation completion."""
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("🚀 立即开始质量评估")
+        self.btn_run.setText("开始评估")
 
         cur_target = self.viewer_target.current_file_path
         current_map = self.rounds_eval_map.get(self.current_round, self.eval_results_map)
@@ -652,7 +669,7 @@ class SingleEvalView(QWidget):
         fname = os.path.basename(cur_target) if cur_target else "目标图像"
         total = len(self.default_order_results)
         round_hint = f" [第 {self.current_round} 轮]" if len(self.rounds_eval_map) > 1 else ""
-        self.lbl_eval_status.setText(f"评估完成: 当前查看 [{fname}]{round_hint} (共 {total} 项算法)")
+        self.lbl_eval_status.setText(f"完成: [{fname}]{round_hint} ({total} 项)")
 
         # Refresh VRAM status on main window
         main_win = self.window()
@@ -670,9 +687,9 @@ class SingleEvalView(QWidget):
             info = self.model_manager.get_model(res.metric_name)
             desc = info.description_zh if info else ""
             self.lbl_explanation.setText(
-                f"【{res.metric_name.upper()} 评估结果: {res.formatted_score} ({res.direction_hint}) | {res.grade}级】\n"
+                f"【{res.metric_name} 结果: {res.formatted_score} ({res.direction_hint}) | {res.grade}级】\n"
                 f"{res.grade_desc}\n\n"
-                f"【标准化质量指数】{res.normalized_quality * 100:.1f} / 100\n\n"
+                f"【标准化质量】{res.normalized_quality * 100:.1f} / 100\n\n"
                 f"【算法原理】{desc}"
             )
 
@@ -683,7 +700,7 @@ class SingleEvalView(QWidget):
 
     def _on_eval_error(self, err_msg: str) -> None:
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("🚀 立即开始质量评估")
+        self.btn_run.setText("开始评估")
         self.lbl_eval_status.setText("评估出错")
         self.lbl_explanation.setText(f"评估出错: {err_msg}")
 

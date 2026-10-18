@@ -141,7 +141,7 @@ def test_model_zoo_view_headless():
 
     # Check dependency status column and detail inspection
     view.table.selectRow(0)
-    assert "运行依赖环境" in view.txt_desc.toHtml()
+    assert "运行依赖" in view.txt_desc.toHtml()
     assert view.btn_install_dep is not None
 
 
@@ -456,6 +456,20 @@ def test_single_view_multi_round_gui():
     view.combo_round_select.setCurrentIndex(1)
     assert view.current_round == 2
     assert "第 2 轮" in view.lbl_eval_status.text()
+
+    # Test preview toggle (close / restore)
+    assert hasattr(view, "btn_close_preview")
+    assert hasattr(view, "btn_show_preview")
+    assert view.tabs_view.isHidden() is False
+    assert view.btn_show_preview.isHidden() is True
+
+    view.set_preview_visible(False)
+    assert view.tabs_view.isHidden() is True
+    assert view.btn_show_preview.isHidden() is False
+
+    view.set_preview_visible(True)
+    assert view.tabs_view.isHidden() is False
+    assert view.btn_show_preview.isHidden() is True
 
 
 

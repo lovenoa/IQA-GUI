@@ -193,14 +193,14 @@ _METRIC_METADATA: Dict[str, Dict] = {
 
     # 2. 全参考深度感知
     "lpips": {
-        "display_name": "LPIPS (学得的感知图像块相似度 - AlexNet)",
+        "display_name": "LPIPS (感知图像块相似度 - AlexNet)",
         "category": CATEGORY_FR_PERCEPTUAL,
         "lower_better": True,
         "score_range": "[0, 1]",
-        "description_zh": "生成对抗网络 (GAN) 与图像重建评估的绝对黄金标准！提取深度网络特征对比，数值越小代表越接近原图视觉质感。",
+        "description_zh": "提取深度网络特征对比感知相似度，数值越小代表越接近原图视觉质感。",
         "requires_weights": True,
         "default_weight_file": "v0.1_alex.pth",
-        "tags": ["工业标准", "GAN必用", "越低越好", "推荐"],
+        "tags": ["深度感知", "越低越好"],
     },
     "lpips-vgg": {
         "display_name": "LPIPS-VGG (VGG骨干网感知相似度)",
@@ -295,9 +295,10 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "category": CATEGORY_NR_DEEP,
         "lower_better": False,
         "score_range": "[0, 100]",
-        "description_zh": "Google 顶会成果，原生支持不同宽高比与任意高分辨率输入！多尺度切片提取特征，无参考综合得分权威准确。",
+        "description_zh": "支持不同宽高比与任意高分辨率输入，多尺度切片提取特征进行无参考质量评估。",
         "requires_weights": True,
-        "tags": ["Google出品", "全分辨率", "主观吻合度极高", "推荐"],
+        "default_weight_file": "musiq_koniq_ckpt-e95806b9.pth",
+        "tags": ["多尺度", "全分辨率"],
     },
     "maniqa": {
         "display_name": "MANIQA (多维注意力机制无参考 IQA)",
@@ -360,9 +361,10 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "category": CATEGORY_AESTHETIC,
         "lower_better": False,
         "score_range": "[1, 10]",
-        "description_zh": "Stable Diffusion 数据集筛选所用美学打分器！基于 CLIP 特征预测图像视觉吸引力。",
+        "description_zh": "基于 CLIP 特征预测图像视觉美感吸引力。",
         "requires_weights": True,
-        "tags": ["AIGC美学", "SD筛选", "推荐"],
+        "default_weight_file": "sac+logos+ava1-l14-linearMSE.pth",
+        "tags": ["AIGC美学"],
     },
     "topiq_iaa": {
         "display_name": "TOPIQ-IAA (拓扑美学质量评估模型)",
@@ -584,90 +586,40 @@ class ModelManager:
                 pass
         return sorted(list(weights))
 
-    def is_cached(self, model_name: str) -> bool:
-        """Check whether the model's weight is present in the cache."""
+    def is_cached(self, model_name: str) -> Optional[bool]:
+        """Check whether the model's weight is present in the cache.
+
+        Returns:
+            True: If the exact weight file exists in local cache, or the model requires no weights.
+            False: If the model has an explicit default_weight_file and it is not found on disk.
+            None: If the weight presence cannot be reliably determined (e.g. dynamic HuggingFace repos or multi-variant models).
+        """
         import urllib.parse
 
         info = self.get_model(model_name)
-        if not info or not info.requires_weights:
-            return True  # Doesn't require weights or unknown
+        if not info:
+            return None
+        if not info.requires_weights:
+            return True  # Doesn't require weights (mathematical/statistical metrics)
 
-        m_lower = model_name.lower().strip()
+        # Strictly check only models with an explicit, unambiguous weight filename defined.
+        # If no explicit single weight file is known, do not guess or display false status.
+        if not info.default_weight_file:
+            return None
 
-        # Known HuggingFace / repository pattern mapping
-        hf_map = {
-            "qalign": ["one-align", "q-future"],
-            "qalign_8bit": ["one-align", "q-future"],
-            "qalign_4bit": ["one-align", "q-future"],
-            "qrealign": ["one-align", "qrealign"],
-            "qrealign-mini": ["one-align", "qrealign"],
-            "qrealign-lite": ["one-align", "qrealign"],
-            "qrealign-pro": ["one-align", "qrealign"],
-            "mplug_owl": ["mplug-owl"],
-            "clipscore": ["clip-vit-large-patch14", "vit-l-14"],
-            "clipiqa": ["vit-b-32", "clip"],
-            "clipiqa+": ["vit-b-32", "clip-iqa%2b", "clipiqa%2b", "rn50", "vitl14"],
-            "laion_aes": ["sac%2blogos", "sac+logos", "vit-l-14", "vit-l/14"],
-            "musiq": ["musiq"],
-            "musiq-spaq": ["musiq_spaq", "musiq"],
-            "musiq-ava": ["musiq_ava", "musiq"],
-            "maniqa": ["maniqa"],
-            "brisque": ["brisque_svm", "brisque_matlab"],
-            "fid": ["pt_inception"],
-            "fid_dinov2": ["pt_inception", "dinov2"],
-            "sfid": ["pt_inception"],
-            "inception_score": ["pt_inception"],
-        }
+        exp_file = info.default_weight_file.strip().lower()
 
-        patterns = hf_map.get(m_lower, [])
-        if not patterns:
-            base = m_lower.split("_")[0].split("-")[0]
-            if base in hf_map:
-                patterns = hf_map[base]
-
-        # 1. Check HuggingFace hub snapshots
+        # Check explicit default weight file across cache roots
         for root in self.get_all_cache_roots():
-            if "huggingface" in str(root).lower() and patterns:
-                try:
-                    for item in root.iterdir():
-                        if item.is_dir() and any(p in item.name.lower() for p in patterns):
-                            snapshots = item / "snapshots"
-                            if snapshots.exists() and any(snapshots.iterdir()):
-                                return True
-                except Exception:
-                    pass
-
-        # 2. Check explicit default weight file across cache roots
-        if info.default_weight_file:
-            exp_file = info.default_weight_file.lower()
-            for root in self.get_all_cache_roots():
-                target = root / info.default_weight_file
-                if target.exists() and not target.name.endswith(".partial"):
-                    return True
-                # Match unquoted name (e.g. sac+logos vs sac%2Blogos)
-                try:
-                    for f in root.iterdir():
-                        if f.is_file() and not f.name.endswith(".partial"):
-                            unq = urllib.parse.unquote(f.name).lower()
-                            if unq == exp_file or f.name.lower() == exp_file:
-                                return True
-                except Exception:
-                    pass
-
-        # 3. Search across all cache roots
-        valid_exts = {".pth", ".pt", ".bin", ".safetensors", ".mat"}
-        for root in self.get_all_cache_roots():
+            target = root / info.default_weight_file
+            if target.exists() and not target.name.endswith(".partial"):
+                return True
+            # Match unquoted name (e.g. sac+logos vs sac%2Blogos)
             try:
-                for f in root.glob("**/*"):
-                    if f.is_file() and f.suffix.lower() in valid_exts and not f.name.endswith(".partial"):
-                        fname = f.name.lower()
-                        unquoted = urllib.parse.unquote(fname).lower()
-                        if m_lower in fname or m_lower in unquoted:
-                            return True
-                        if patterns and any(p in fname or p in unquoted for p in patterns):
-                            return True
-                        base = m_lower.split("_")[0].split("-")[0]
-                        if len(base) >= 4 and (base in fname or base in unquoted):
+                for f in root.iterdir():
+                    if f.is_file() and not f.name.endswith(".partial"):
+                        unq = urllib.parse.unquote(f.name).lower()
+                        if unq == exp_file or f.name.lower() == exp_file:
                             return True
             except Exception:
                 pass

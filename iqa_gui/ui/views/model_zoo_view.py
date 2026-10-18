@@ -193,17 +193,23 @@ class ModelZooView(QWidget):
             # Dependency & Weight Status
             dep_status = self.model_manager.check_dependencies(info.name)
             if not dep_status.is_ready:
-                status_item = QTableWidgetItem(f"⚠️ 缺组件: {', '.join(dep_status.missing_required)}")
+                status_item = QTableWidgetItem(f"缺组件: {', '.join(dep_status.missing_required)}")
                 status_item.setForeground(Qt.GlobalColor.darkRed)
             elif not info.requires_weights:
-                status_item = QTableWidgetItem("免权重 (数学/统计)")
+                status_item = QTableWidgetItem("免权重")
                 status_item.setForeground(Qt.GlobalColor.darkGray)
-            elif self.model_manager.is_cached(info.name):
-                status_item = QTableWidgetItem("✅ 已就绪 (本地已缓存)")
-                status_item.setForeground(Qt.GlobalColor.darkGreen)
             else:
-                status_item = QTableWidgetItem("☁ 待下载")
-                status_item.setForeground(Qt.GlobalColor.darkYellow)
+                cached_status = self.model_manager.is_cached(info.name)
+                if cached_status is True:
+                    status_item = QTableWidgetItem("已下载")
+                    status_item.setForeground(Qt.GlobalColor.darkGreen)
+                elif cached_status is False:
+                    status_item = QTableWidgetItem("待下载")
+                    status_item.setForeground(Qt.GlobalColor.darkYellow)
+                else:
+                    # 无法确定状态的算法不显示下载状态，显示横杠 "-"
+                    status_item = QTableWidgetItem("-")
+                    status_item.setForeground(Qt.GlobalColor.gray)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, 5, status_item)
 
@@ -217,7 +223,7 @@ class ModelZooView(QWidget):
             for f in cache_dir.iterdir():
                 if f.is_file():
                     total_size_mb += f.stat().st_size / (1024 * 1024)
-        self.lbl_cache_summary.setText(f"本地权重缓存: {len(cached_files)} 个模型文件 ({total_size_mb:.1f} MB)")
+        self.lbl_cache_summary.setText(f"本地权重缓存: {len(cached_files)} 个文件 ({total_size_mb:.1f} MB)")
 
     def _on_table_selection(self) -> None:
         selected_rows = self.table.selectionModel().selectedRows()
@@ -233,21 +239,21 @@ class ModelZooView(QWidget):
             dep_status = self.model_manager.check_dependencies(info.name)
 
             if dep_status.is_ready:
-                dep_html = "<span style='color: #22c55e;'>🟢 环境完全就绪 (依赖包已满足)</span>"
+                dep_html = "<span style='color: #22c55e;'>依赖包已就绪</span>"
             else:
-                dep_html = f"<span style='color: #ef4444;'>⚠️ 缺少必要组件: <b>{', '.join(dep_status.missing_required)}</b></span>"
+                dep_html = f"<span style='color: #ef4444;'>缺少必要组件: <b>{', '.join(dep_status.missing_required)}</b></span>"
 
             if dep_status.missing_optional:
-                dep_html += f"<br><span style='color: #888888;'>ℹ 可选硬件加速: 未安装 {', '.join(dep_status.missing_optional)} (默认使用原生矩阵计算)</span>"
+                dep_html += f"<br><span style='color: #888888;'>可选组件: 未安装 {', '.join(dep_status.missing_optional)}</span>"
 
             details_html = (
                 f"<b>内部标识:</b> <code>{info.name}</code><br>"
-                f"<b>评估模式:</b> {info.mode} ({'全参考 Full Reference' if info.mode == 'FR' else '无参考 No Reference'})<br>"
+                f"<b>评估模式:</b> {info.mode} ({'全参考' if info.mode == 'FR' else '无参考'})<br>"
                 f"<b>所属分类:</b> {CATEGORY_NAMES.get(info.category, info.category)}<br>"
                 f"<b>得分方向:</b> {info.direction_str}<br>"
-                f"<b>常规分值范围:</b> {info.score_range}<br>"
-                f"<b>运行依赖环境:</b> {dep_html}<br>"
-                f"<b>是否需要预训练权重:</b> {'是 (需要从网络下载或使用本地缓存)' if info.requires_weights else '否 (基于纯算法与统计特征计算，零等待)'}<br>"
+                f"<b>分值范围:</b> {info.score_range}<br>"
+                f"<b>运行依赖:</b> {dep_html}<br>"
+                f"<b>预训练权重:</b> {'需要下载或本地提供' if info.requires_weights else '免权重 (数学/统计计算)'}<br>"
                 f"<b>标签:</b> {', '.join(info.tags)}<br><br>"
                 f"<b>【功能与原理说明】</b><br>{info.description_zh}"
             )

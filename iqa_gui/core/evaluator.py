@@ -158,75 +158,75 @@ def calculate_grade(
     # Domain-specific overrides
     if m == "laion_aes":
         if score >= 7.0:
-            tier, desc = "S", "🌟 【S级 大师级美学】艺术质感极佳，色彩光影绝美，美学水准出众。"
+            tier, desc = "S", "美学评分较高"
         elif score >= 6.0:
-            tier, desc = "A", "✨ 【A级 优质画面】画面干净精致，构图与色调和谐，质感良好。"
+            tier, desc = "A", "美学评分良好"
         elif score >= 5.0:
-            tier, desc = "B", "👌 【B级 达标画质】整体合格，可能存在轻微色彩平淡或局部细节较普通。"
+            tier, desc = "B", "美学评分一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 偏低/瑕疵】美学评分偏低，画面可能存在杂色、暗沉或构图失衡。"
+            tier, desc = "C", "美学评分偏低"
     elif "clipiqa" in m:
         if score >= 0.70:
-            tier, desc = "S", "🌟 【S级 高清精修】纹理细腻，线条清晰锐利，符合高品质视觉先验。"
+            tier, desc = "S", "感知清晰度高"
         elif score >= 0.55:
-            tier, desc = "A", "✨ 【A级 良好画质】质感良好，画面层次清晰完整。"
+            tier, desc = "A", "感知清晰度良好"
         elif score >= 0.40:
-            tier, desc = "B", "👌 【B级 画质一般】细节中规中矩，无明显亮点。"
+            tier, desc = "B", "感知清晰度一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 线条模糊/噪点】可能存在线条发虚、涂抹感重或局部细节缺失。"
+            tier, desc = "C", "感知清晰度偏低"
     elif "musiq" in m:
         if score >= 70.0:
-            tier, desc = "S", "🌟 【S级 全局超清】多尺度细节极为丰富，无拉伸或失真损耗。"
+            tier, desc = "S", "多尺度质量优"
         elif score >= 58.0:
-            tier, desc = "A", "✨ 【A级 清晰优秀】不同观看尺度下清晰度均维持在较高水准。"
+            tier, desc = "A", "多尺度质量良好"
         elif score >= 45.0:
-            tier, desc = "B", "👌 【B级 清晰达标】基本满足常规分辨率观看要求。"
+            tier, desc = "B", "多尺度质量一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 清晰度不足】在全图视角下细节略显软绵或存在压缩失真。"
+            tier, desc = "C", "多尺度质量偏低"
     elif m == "maniqa":
         if score >= 0.65:
-            tier, desc = "S", "🌟 【S级 结构高度精准】主体边缘与纹理细节感知极为稳定。"
+            tier, desc = "S", "结构细节表现优"
         elif score >= 0.50:
-            tier, desc = "A", "✨ 【A级 结构正常】未检测到明显的纹理崩解或严重形变。"
+            tier, desc = "A", "结构细节表现良好"
         elif score >= 0.35:
-            tier, desc = "B", "👌 【B级 结构可接受】存在轻微不自然线条或伪影。"
+            tier, desc = "B", "结构细节表现一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 局部可能畸变】建议放大检查主体边缘线条或复杂纹理细节。"
+            tier, desc = "C", "可能存在伪影或失真"
     elif m == "clipscore":
         if score >= 28.0:
-            tier, desc = "S", "🎯 【S级 提示词高契合度】画面内容与文字提示词高度对齐！"
+            tier, desc = "S", "图文契合度高"
         elif score >= 22.0:
-            tier, desc = "A", "👌 【A级 契合度良好】主体内容与提示词相符，修饰细节部分体现。"
+            tier, desc = "A", "图文契合度良好"
         elif score >= 16.0:
-            tier, desc = "B", "👌 【B级 契合度尚可】主体符合，细节略有出入。"
+            tier, desc = "B", "图文契合度一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 契合度较低】画面内容与提示词存在偏差，存在偏题可能。"
+            tier, desc = "C", "图文契合度较低"
     elif m == "psnr":
         tier = "S" if score >= 35.0 else ("A" if score >= 28.0 else ("B" if score >= 20.0 else "C"))
-        desc = f"峰值信噪比: {score:.2f} dB (全参考)"
+        desc = f"信噪比优 (>=35dB)" if tier == "S" else (f"信噪比良好 (>=28dB)" if tier == "A" else (f"信噪比一般 (>=20dB)" if tier == "B" else f"信噪比偏低 (<20dB)"))
     elif m == "ssim":
         tier = "S" if score >= 0.95 else ("A" if score >= 0.85 else ("B" if score >= 0.70 else "C"))
-        desc = f"结构相似度: {score:.4f} (全参考)"
+        desc = f"保真度高 (>=0.95)" if tier == "S" else (f"保真度良好 (>=0.85)" if tier == "A" else (f"保真度一般 (>=0.70)" if tier == "B" else f"失真明显 (<0.70)"))
     elif m == "lpips":
         tier = "S" if score <= 0.10 else ("A" if score <= 0.25 else ("B" if score <= 0.45 else "C"))
-        desc = f"深度感知差异: {score:.4f} (全参考)"
+        desc = f"感知差异小 (<=0.10)" if tier == "S" else (f"感知差异较小 (<=0.25)" if tier == "A" else (f"感知差异一般 (<=0.45)" if tier == "B" else f"感知失真明显 (>0.45)"))
     elif m == "dists":
         tier = "S" if score <= 0.12 else ("A" if score <= 0.28 else ("B" if score <= 0.48 else "C"))
-        desc = f"深度纹理与结构相似度: {score:.4f} (全参考)"
+        desc = f"相似度高 (<=0.12)" if tier == "S" else (f"相似度良好 (<=0.28)" if tier == "A" else (f"相似度一般 (<=0.48)" if tier == "B" else f"失真明显 (>0.48)"))
     else:
         # Universal normalization-based grade calculation
         if normalized_quality >= 0.85:
-            tier, desc = "S", "🌟 【S级 卓越画质】归一化画质指数表现顶尖，感知细节与视觉质感极佳。"
+            tier, desc = "S", "质量优良"
         elif normalized_quality >= 0.70:
-            tier, desc = "A", "✨ 【A级 优质画面】归一化画质指数良好，画面干净清晰，处于高水准。"
+            tier, desc = "A", "质量良好"
         elif normalized_quality >= 0.50:
-            tier, desc = "B", "👌 【B级 达标画质】归一化画质指数处于常规可用范围，满足基本画质要求。"
+            tier, desc = "B", "质量一般"
         else:
-            tier, desc = "C", "⚠️ 【C级 表现较弱】归一化画质指数偏低，可能存在可见伪影、模糊或失真。"
+            tier, desc = "C", "质量较差"
 
-    # Check for stochastic variability across repeated runs
+    # Concise indicator for variable metrics
     if is_variable_metric(m):
-        desc = f"{desc} [⚠️ 浮动提醒: 该算法重复测试可能存在微小变动，建议开启多轮测试查看极差与均值]"
+        desc = f"{desc} (易浮动)"
 
     return tier, desc
 

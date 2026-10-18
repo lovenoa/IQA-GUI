@@ -84,12 +84,14 @@ def test_cache_status():
     assert "brisque_svm_weights.pth" in cached
     assert mgr.is_cached("brisque") is True
 
-    # Test enhanced cache detection for HuggingFace and multi-root models
-    assert mgr.is_cached("qalign_8bit") is True
-    assert mgr.is_cached("qalign") is True
-    assert mgr.is_cached("clipscore") is True
+    # Exact file verified
     assert mgr.is_cached("laion_aes") is True
     assert mgr.is_cached("psnr") is True  # zero weights needed
+
+    # Indeterminate models without deterministic single weight file return None (rendered as '-')
+    assert mgr.is_cached("qalign_8bit") is None
+    assert mgr.is_cached("qalign") is None
+    assert mgr.is_cached("clipscore") is None
 
 
 def test_dependency_detection():

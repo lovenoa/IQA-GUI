@@ -69,9 +69,9 @@ class MainWindow(QMainWindow):
         # Title
         title_layout = QVBoxLayout()
         title_layout.setSpacing(1)
-        lbl_title = QLabel("🖼️ IQA-PyTorch 图像质量评估工作台")
+        lbl_title = QLabel("IQA-PyTorch 图像质量评估工具")
         lbl_title.setObjectName("AppTitle")
-        lbl_subtitle = QLabel("涵盖 106+ 款深度感知与传统画质评估算法 · 多模态与多维视觉分析平台")
+        lbl_subtitle = QLabel("支持 106+ 项图像质量评估算法")
         lbl_subtitle.setObjectName("AppSubtitle")
         title_layout.addWidget(lbl_title)
         title_layout.addWidget(lbl_subtitle)
@@ -81,19 +81,19 @@ class MainWindow(QMainWindow):
 
         # Tips / Guidance Toggle Button
         self.tips_enabled = self.settings.get("show_tips", True)
-        self.btn_toggle_tips = QPushButton("💡 操作提示: 开" if self.tips_enabled else "💡 操作提示: 关")
+        self.btn_toggle_tips = QPushButton("操作提示: 开" if self.tips_enabled else "操作提示: 关")
         self.btn_toggle_tips.setCheckable(True)
         self.btn_toggle_tips.setChecked(self.tips_enabled)
-        self.btn_toggle_tips.setToolTip("开启或关闭界面中的操作指引与原理提示说明框，关闭可保持界面清爽高密度")
+        self.btn_toggle_tips.setToolTip("开启或关闭界面中的操作指引与说明")
         self.btn_toggle_tips.toggled.connect(self._on_tips_toggled)
         header_layout.addWidget(self.btn_toggle_tips)
 
         # Auto Release VRAM Toggle Button
         self.auto_release_vram = self.settings.get("auto_release_vram", True)
-        self.btn_toggle_vram = QPushButton("🔄 自动释放显存: 开" if self.auto_release_vram else "🔄 自动释放显存: 关")
+        self.btn_toggle_vram = QPushButton("自动释放显存: 开" if self.auto_release_vram else "自动释放显存: 关")
         self.btn_toggle_vram.setCheckable(True)
         self.btn_toggle_vram.setChecked(self.auto_release_vram)
-        self.btn_toggle_vram.setToolTip("开启后，运算完成或出错时会自动卸载模型并清空显存缓存；关闭则常驻显存以加快连续重复推断速度")
+        self.btn_toggle_vram.setToolTip("开启后，每次运算完成时会自动释放显存")
         self.btn_toggle_vram.toggled.connect(self._on_auto_release_vram_toggled)
         header_layout.addWidget(self.btn_toggle_vram)
 
@@ -101,31 +101,31 @@ class MainWindow(QMainWindow):
         if self.hw_info.has_nvidia_gpu:
             gpu_short = self.hw_info.gpu_name.replace("NVIDIA GeForce ", "")
             if self.hw_info.torch_cuda_available:
-                btn_hw_text = f"⚡ 独显加速: {gpu_short} (CUDA运行中)"
+                btn_hw_text = f"独显加速: {gpu_short} (CUDA)"
                 self.btn_hardware = QPushButton(btn_hw_text)
                 self.btn_hardware.setProperty("class", "PrimaryButton")
             else:
-                btn_hw_text = f"🖥️ 独显: {gpu_short} (CPU运行中，点击诊断)"
+                btn_hw_text = f"独显: {gpu_short} (CPU运行中)"
                 self.btn_hardware = QPushButton(btn_hw_text)
         else:
-            btn_hw_text = "🖥️ CPU 运算模式"
+            btn_hw_text = "CPU 运算"
             self.btn_hardware = QPushButton(btn_hw_text)
 
-        self.btn_hardware.setToolTip("点击查看独立显卡状态与 CUDA 加速环境诊断")
+        self.btn_hardware.setToolTip("查看显卡状态与运行环境")
         self.btn_hardware.clicked.connect(self._show_hardware_dialog)
         header_layout.addWidget(self.btn_hardware)
 
         # Background Console Log Button
-        self.btn_logs = QPushButton("📋 后台日志 (Console)")
-        self.btn_logs.setToolTip("实时打开后台控制台，监视模型权重下载(HuggingFace)、运算推断与错误详情")
+        self.btn_logs = QPushButton("运行日志")
+        self.btn_logs.setToolTip("查看运行日志与输出详情")
         self.btn_logs.clicked.connect(self.open_log_viewer)
         header_layout.addWidget(self.btn_logs)
 
         # Theme Selector
         self.combo_theme = QComboBox()
-        self.combo_theme.addItem("💻 跟随系统主题", THEME_MODE_AUTO)
-        self.combo_theme.addItem("🌙 深色模式 (Dark)", THEME_MODE_DARK)
-        self.combo_theme.addItem("☀️ 浅色模式 (Light)", THEME_MODE_LIGHT)
+        self.combo_theme.addItem("跟随系统主题", THEME_MODE_AUTO)
+        self.combo_theme.addItem("深色模式", THEME_MODE_DARK)
+        self.combo_theme.addItem("浅色模式", THEME_MODE_LIGHT)
 
         saved_theme = self.settings.get("theme", THEME_MODE_AUTO)
         idx_theme = self.combo_theme.findData(saved_theme)
@@ -142,30 +142,30 @@ class MainWindow(QMainWindow):
 
         # View 1: Single & Pair Assessment
         self.view_single = SingleEvalView(self.evaluator_engine, self)
-        self.tabs.addTab(self.view_single, "🔍 单图/成对快速比对 (Single & Pair)")
+        self.tabs.addTab(self.view_single, "单图与多图评估")
 
         # View 2: Batch Evaluation
         self.view_batch = BatchEvalView(self.evaluator_engine, self)
-        self.tabs.addTab(self.view_batch, "📁 文件夹多图批量评测 (Batch Folder)")
+        self.tabs.addTab(self.view_batch, "文件夹批量评测")
 
         # View 3: gMAD Analysis
         self.view_gmad = GMADView(self.evaluator_engine, self)
-        self.tabs.addTab(self.view_gmad, "⚔️ gMAD 算法对抗分析 (gMAD Contest)")
+        self.tabs.addTab(self.view_gmad, "gMAD 差异对生成")
 
         # View 4: Dataset Benchmark
         self.view_bench = BenchmarkView(self.evaluator_engine, self)
-        self.tabs.addTab(self.view_bench, "📈 数据集学术基准测试 (Benchmark)")
+        self.tabs.addTab(self.view_bench, "基准性能评测")
 
         # View 5: Model Zoo
         self.view_zoo = ModelZooView(self.evaluator_engine, self)
-        self.tabs.addTab(self.view_zoo, "📚 算法图谱与权重中心 (Model Zoo)")
+        self.tabs.addTab(self.view_zoo, "算法库管理")
 
         main_layout.addWidget(self.tabs, 1)
 
         # ---------------- Status Bar ----------------
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        dev_label = "CUDA GPU 极速模式" if self.effective_device == "cuda" else "CPU 处理器运算模式"
+        dev_label = "CUDA 模式" if self.effective_device == "cuda" else "CPU 模式"
         self.lbl_status_main = QLabel(f"系统就绪 | 运算核心: {dev_label} | 算法库规模: 106+ 种模型")
         self.status_bar.addWidget(self.lbl_status_main, 1)
 
