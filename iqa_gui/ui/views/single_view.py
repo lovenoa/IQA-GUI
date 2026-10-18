@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -54,6 +54,27 @@ def interpret_perceptual_score(
 
 
 interpret_anime_aigc_score = interpret_perceptual_score  # 兼容别名
+
+
+class CornerButtonContainer(QWidget):
+    """Wrapper container for QTabWidget corner button to allow custom vertical offset."""
+
+    def __init__(self, button: QPushButton, shift_y: int = 4, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.btn = button
+        self.btn.setParent(self)
+        self.shift_y = shift_y
+
+    def sizeHint(self) -> QSize:
+        sz = self.btn.sizeHint()
+        return QSize(sz.width() + 6, sz.height())
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        btn_h = self.btn.sizeHint().height()
+        btn_w = self.width() - 6
+        y = (self.height() - btn_h) // 2 - self.shift_y
+        self.btn.setGeometry(0, y, btn_w, btn_h)
 
 
 class SingleEvalView(QWidget):
@@ -246,11 +267,12 @@ class SingleEvalView(QWidget):
         diff_layout.addWidget(self.viewer_diff)
         self.tabs_view.addTab(tab_diff, "差异分布 (Difference)")
 
-        # Close preview button on the top-right corner of preview tabs
+        # Close preview button on the top-right corner of preview tabs (shifted up 4px)
         self.btn_close_preview = QPushButton("关闭预览")
         self.btn_close_preview.setToolTip("隐藏图像预览画布，最大化查看结果看板")
         self.btn_close_preview.clicked.connect(lambda: self.set_preview_visible(False))
-        self.tabs_view.setCornerWidget(self.btn_close_preview, Qt.Corner.TopRightCorner)
+        self.corner_preview_container = CornerButtonContainer(self.btn_close_preview, shift_y=4)
+        self.tabs_view.setCornerWidget(self.corner_preview_container, Qt.Corner.TopRightCorner)
 
         splitter.addWidget(self.tabs_view)
         splitter.setStretchFactor(0, 4)
