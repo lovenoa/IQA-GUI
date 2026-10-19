@@ -91,7 +91,7 @@ class SingleEvalView(QWidget):
 
     def _init_ui(self) -> None:
         main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setContentsMargins(6, 0, 6, 6)
         main_layout.setSpacing(6)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
