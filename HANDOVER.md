@@ -114,7 +114,7 @@ c:\Workspace\IQA-GUI/
 | **多图对比机制** | 解除 3 张上限；≥3 张时标注最优与垫底 | 满足多张候选图像横向比对需求；≥3 张时明确指出胜出图与最差图，全参考与提示词指标附加适用性警告 | [`compare_dialog.py`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/components/compare_dialog.py#L195-L200) |
 | **多轮测试统计** | 支持 2~20 轮测试并聚合极差、标准差与均值 | 单图评测评估波动范围，多图比对通过均值 PK 排除偶然误差 | [`multi_round_dialog.py`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/components/multi_round_dialog.py#L170-L225) |
 | **模型库缓存检测** | 严格遵循确定性原则；无法完全肯定时不显示 | 避免非本地存在的模型被误判为“已下载”，杜绝假阳性误导用户 | [`model_manager.py#is_cached`](file:///c:/Workspace/IQA-GUI/iqa_gui/core/model_manager.py#L589-L627) |
-| **预览关闭按钮布局与视图边距** | 自适应容器规范（Right: 20px，Bottom: 3px，高度 22px，统一 `TabCornerButton` 样式）及外层边距设为 `(0, 0, 0, 6)` | 确保“关闭预览”按钮右边缘与下方预览卡片内“选择文件...”按钮右边缘严格垂直对齐（0px 偏差），且与下方展示卡片彻底独立拉开 5px 间隙（满足 $\ge 4$px），在 TabBar 内绝对视觉垂直居中且四角圆角边框无裁切；同时单图视图外层边距设为 `(0, 0, 0, 6)`，使左侧算法卡片边框与上方“单图与多图评估”选项卡左边缘严格垂直对齐，左右通体规整对齐 | [`single_view.py#CornerButtonContainer`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/views/single_view.py#L59-L69)<br>[`single_view.py#_init_ui`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/views/single_view.py#L91-L97)<br>[`theme.py#TabCornerButton`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/theme.py#L186) |
+| **预览关闭按钮布局与视图边距** | 自适应容器规范（Right: 0px，Bottom: 3px，高度 22px，统一 `TabCornerButton` 样式）及外层边距设为 `(0, 0, 0, 6)` | 确保“关闭预览”按钮向右完全靠齐（Right Margin 为 0px），其右边缘与下方预览卡片右外边框严格垂直对齐，且与下方展示卡片彻底独立拉开 5px 间隙（满足 $\ge 4$px），在 TabBar 内绝对视觉垂直居中且四角圆角边框无裁切；同时单图视图外层边距设为 `(0, 0, 0, 6)`，使左侧算法卡片边框与上方“单图与多图评估”选项卡左边缘严格垂直对齐，左右通体规整对齐 | [`single_view.py#CornerButtonContainer`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/views/single_view.py#L59-L69)<br>[`single_view.py#_init_ui`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/views/single_view.py#L91-L97)<br>[`theme.py#TabCornerButton`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/theme.py#L186) |
 | **无头测试防护** | 保护 `QApplication.clipboard()` 访问 | 在无界面测试环境（`offscreen`）下调用剪贴板会导致底层崩溃，增加环境变量判断规避 | [`compare_dialog.py#L302`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/components/compare_dialog.py#L302)<br>[`metric_selector.py#L302-L306`](file:///c:/Workspace/IQA-GUI/iqa_gui/ui/components/metric_selector.py#L302-L306) |
 
 ---
@@ -123,10 +123,11 @@ c:\Workspace\IQA-GUI/
 
 - **Git 状态**：分支 `master`，工作区干净（已完成代码与移交文档的同步提交）。
 - **最新提交记录**：
-  1. `HEAD (当前提交)`: `style: right-align preview close button with browse button`
-  2. `4b010ea`: `style: align single view left edge with tab bar`
-  3. `967d2cb`: `style: compress single view top margin to 0px for compact layout`
-  4. `323a688`: `style: optimize preview close button vertical centering, gap to display, and tab bar height`
+  1. `HEAD (当前提交)`: `style: right-align preview close button flush with card right edge`
+  2. `da81a42`: `style: right-align preview close button with browse button`
+  3. `4b010ea`: `style: align single view left edge with tab bar`
+  4. `967d2cb`: `style: compress single view top margin to 0px for compact layout`
+  5. `323a688`: `style: optimize preview close button vertical centering, gap to display, and tab bar height`
   2. `99ca378`: `docs: add handover documentation (HANDOVER.md)`
   3. `e83bdbe`: `style: remove emoji from compare dialog window title`
   4. `9e289b0`: `style: adjust preview corner button size and layout margins for complete display without clipping`
