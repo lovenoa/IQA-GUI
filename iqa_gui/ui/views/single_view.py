@@ -63,7 +63,7 @@ class CornerButtonContainer(QWidget):
         super().__init__(parent)
         self.btn = button
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 16, 3)
+        layout.setContentsMargins(0, 0, 20, 3)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
