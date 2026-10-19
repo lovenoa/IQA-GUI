@@ -85,6 +85,17 @@ def test_single_view_headless():
     view.metric_selector.set_selected(["psnr"])
     assert view.viewer_ref.isHidden() is False
 
+    # Verify preview toggle visibility and corner button setup
+    assert view.btn_close_preview.property("class") == "TabCornerButton"
+    assert view.btn_close_preview.maximumHeight() == 22 or view.btn_close_preview.height() == 22
+    assert view.tabs_view.isHidden() is False
+    view.btn_close_preview.click()
+    assert view.tabs_view.isHidden() is True
+    assert view.btn_show_preview.isHidden() is False
+    view.btn_show_preview.click()
+    assert view.tabs_view.isHidden() is False
+    assert view.btn_show_preview.isHidden() is True
+
 
 def test_log_viewer_headless():
     window = MainWindow()

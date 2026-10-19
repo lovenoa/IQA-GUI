@@ -74,7 +74,7 @@ QTabWidget::pane {
 QTabBar::tab {
     background: #0F172A;
     color: #94A3B8;
-    padding: 6px 16px;
+    padding: 8px 16px;
     font-weight: 600;
     font-size: 12px;
     border-top-left-radius: 4px;
@@ -181,6 +181,28 @@ QPushButton.DangerButton {
 
 QPushButton.DangerButton:hover {
     background-color: #B91C1C;
+}
+
+QPushButton.TabCornerButton {
+    background-color: #1E293B;
+    color: #CBD5E1;
+    border: 1px solid #475569;
+    border-radius: 4px;
+    padding: 1px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    min-height: 20px;
+    max-height: 22px;
+}
+
+QPushButton.TabCornerButton:hover {
+    background-color: #334155;
+    border-color: #64748B;
+    color: #F8FAFC;
+}
+
+QPushButton.TabCornerButton:pressed {
+    background-color: #0F172A;
 }
 
 /* Inputs, TextEdits & Combos */
@@ -506,7 +528,7 @@ QTabWidget::pane {
 QTabBar::tab {
     background: #F1F5F9;
     color: #475569;
-    padding: 6px 16px;
+    padding: 8px 16px;
     font-weight: 600;
     font-size: 12px;
     border-top-left-radius: 4px;
@@ -613,6 +635,28 @@ QPushButton.DangerButton {
 
 QPushButton.DangerButton:hover {
     background-color: #B91C1C;
+}
+
+QPushButton.TabCornerButton {
+    background-color: #F8FAFC;
+    color: #475569;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    padding: 1px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    min-height: 20px;
+    max-height: 22px;
+}
+
+QPushButton.TabCornerButton:hover {
+    background-color: #E2E8F0;
+    border-color: #94A3B8;
+    color: #0F172A;
+}
+
+QPushButton.TabCornerButton:pressed {
+    background-color: #CBD5E1;
 }
 
 /* Inputs, TextEdits & Combos */

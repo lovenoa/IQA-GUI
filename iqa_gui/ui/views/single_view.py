@@ -57,15 +57,16 @@ interpret_anime_aigc_score = interpret_perceptual_score  # 兼容别名
 
 
 class CornerButtonContainer(QWidget):
-    """Wrapper container for QTabWidget corner button to allow custom vertical offset and complete display."""
+    """Wrapper container for QTabWidget corner button to ensure precise vertical centering and alignment."""
 
     def __init__(self, button: QPushButton, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.btn = button
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 6, 4)
+        layout.setContentsMargins(0, 0, 16, 3)
         layout.setSpacing(0)
-        layout.addWidget(self.btn)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
 
 class SingleEvalView(QWidget):
@@ -186,6 +187,8 @@ class SingleEvalView(QWidget):
 
         # Button to restore preview when hidden
         self.btn_show_preview = QPushButton("展开预览")
+        self.btn_show_preview.setProperty("class", "TabCornerButton")
+        self.btn_show_preview.setFixedHeight(22)
         self.btn_show_preview.setToolTip("重新展开右侧图像预览画布")
         self.btn_show_preview.clicked.connect(lambda: self.set_preview_visible(True))
         self.btn_show_preview.hide()
@@ -258,10 +261,11 @@ class SingleEvalView(QWidget):
         diff_layout.addWidget(self.viewer_diff)
         self.tabs_view.addTab(tab_diff, "差异分布 (Difference)")
 
-        # Close preview button on the top-right corner of preview tabs (adjusted size for complete display)
+        # Close preview button on the top-right corner of preview tabs
         self.btn_close_preview = QPushButton("关闭预览")
+        self.btn_close_preview.setProperty("class", "TabCornerButton")
         self.btn_close_preview.setToolTip("隐藏图像预览画布，最大化查看结果看板")
-        self.btn_close_preview.setStyleSheet("QPushButton { padding: 2px 8px; font-size: 11px; }")
+        self.btn_close_preview.setFixedHeight(22)
         self.btn_close_preview.clicked.connect(lambda: self.set_preview_visible(False))
         self.corner_preview_container = CornerButtonContainer(self.btn_close_preview, self.tabs_view)
         self.tabs_view.setCornerWidget(self.corner_preview_container, Qt.Corner.TopRightCorner)
