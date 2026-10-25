@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from typing import Optional
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from iqa_gui.config import get_effective_device, load_settings, save_settings
+from iqa_gui.config import get_effective_device, load_settings, update_settings, SettingsSaveError
 from iqa_gui.core.evaluator import EvaluatorEngine
 from iqa_gui.core.hardware import detect_hardware
 from iqa_gui.ui.theme import THEME_MODE_AUTO, THEME_MODE_DARK, THEME_MODE_LIGHT, apply_theme_to_app
@@ -49,6 +49,11 @@ class MainWindow(QMainWindow):
         preferred_device = self.settings.get("preferred_device", "auto")
         self.effective_device = get_effective_device(preferred_device)
         self.evaluator_engine = EvaluatorEngine(device=self.effective_device)
+        self._active_tasks = set()
+        self._closing = False
+        self._close_poll = QTimer(self)
+        self._close_poll.setInterval(50)
+        self._close_poll.timeout.connect(self._finish_close_when_idle)
 
         self._init_ui()
 
@@ -201,8 +206,7 @@ class MainWindow(QMainWindow):
     def _on_tips_toggled(self, checked: bool) -> None:
         self.tips_enabled = checked
         self.btn_toggle_tips.setText("操作提示: 开" if checked else "操作提示: 关")
-        self.settings["show_tips"] = checked
-        save_settings(self.settings)
+        self._save_setting("show_tips", checked)
         self.apply_tips_visibility(checked)
 
     def apply_tips_visibility(self, visible: bool) -> None:
@@ -222,8 +226,7 @@ class MainWindow(QMainWindow):
 
     def _on_theme_changed(self) -> None:
         mode = self.combo_theme.currentData()
-        self.settings["theme"] = mode
-        save_settings(self.settings)
+        self._save_setting("theme", mode)
         apply_theme_to_app(QApplication.instance(), mode)
 
     def _show_hardware_dialog(self) -> None:
@@ -282,6 +285,9 @@ class MainWindow(QMainWindow):
 
     def _on_purge_vram_clicked(self) -> None:
         """Manually purge all loaded models and free VRAM."""
+        if self._active_tasks:
+            self.status_bar.showMessage("请等待当前任务清理结束后再释放显存。", 4000)
+            return
         self.evaluator_engine.release_vram(force_unload=True)
         self.update_vram_display()
         self.status_bar.showMessage("显存已强制释放，所有已加载模型均已卸载。", 4000)
@@ -289,9 +295,88 @@ class MainWindow(QMainWindow):
     def _on_auto_release_vram_toggled(self, checked: bool) -> None:
         self.auto_release_vram = checked
         self.btn_toggle_vram.setText("自动释放显存: 开" if checked else "自动释放显存: 关")
-        self.settings["auto_release_vram"] = checked
-        save_settings(self.settings)
-        if checked:
+        self._save_setting("auto_release_vram", checked)
+        if checked and not self._active_tasks:
             self.evaluator_engine.release_vram(force_unload=True)
             self.update_vram_display()
+
+    def _save_setting(self, name, value):
+        try:
+            self.settings = update_settings({name: value})
+        except SettingsSaveError as exc:
+            QMessageBox.warning(self, "设置未保存", f"本次设置仅在当前窗口生效，原配置已保留。\n{exc}")
+
+    def begin_task(self, worker, owner):
+        """One shared engine owns one UI task until native thread completion."""
+        if self._closing or self._active_tasks:
+            self.status_bar.showMessage("已有任务正在运行或清理，请等待结束后再开始。", 5000)
+            return False
+        if worker.parent() is None:
+            worker.setParent(owner)
+        self._active_tasks.add(worker)
+        worker.finished.connect(self._on_task_stopped)
+        self._set_task_controls(True)
+        try:
+            worker.start()
+        except Exception:
+            self._active_tasks.discard(worker)
+            self._set_task_controls(False)
+            raise
+        return True
+
+    def _set_task_controls(self, busy):
+        for view in (self.view_single, self.view_batch, self.view_gmad, self.view_bench):
+            for name in ("btn_run", "btn_start"):
+                if hasattr(view, name):
+                    getattr(view, name).setEnabled(not busy)
+        self.view_zoo.btn_preload_popular.setEnabled(not busy)
+        self.view_zoo.btn_download_single.setEnabled(False)
+        self.view_zoo.btn_install_dep.setEnabled(not busy)
+        self.btn_purge_vram.setEnabled(not busy)
+        self.btn_toggle_vram.setEnabled(not busy)
+        if not busy:
+            self.view_zoo._on_table_selection()
+
+    @Slot()
+    def _on_task_stopped(self):
+        # A QObject receiver gives Qt a weak, thread-aware connection. A lambda
+        # capturing this window and its child thread can destroy the parent
+        # from inside the child's DeferredDelete on PySide.
+        self._task_stopped(self.sender())
+
+    def _task_stopped(self, worker):
+        self._active_tasks.discard(worker)
+        if self._closing:
+            self._finish_close_when_idle()
+        else:
+            self._set_task_controls(bool(self._active_tasks))
+            self.update_vram_display()
+        # Native finished is the safe point for releasing the owning reference.
+        for owner in (self.view_single, self.view_batch, self.view_gmad,
+                      self.view_bench, self.view_zoo, self.view_single.metric_selector,
+                      self.view_batch.metric_selector, self.view_bench.metric_selector):
+            for name in ("active_worker", "preload_worker", "_installer_worker"):
+                if getattr(owner, name, None) is worker:
+                    setattr(owner, name, None)
+        worker.deleteLater()
+
+    def _finish_close_when_idle(self):
+        if self._closing and not self._active_tasks:
+            self._close_poll.stop()
+            QTimer.singleShot(0, self.close)
+
+    def closeEvent(self, event):
+        if self._active_tasks:
+            event.ignore()
+            self._closing = True
+            self.centralWidget().setEnabled(False)
+            self.status_bar.showMessage("正在安全停止任务；当前推理或组件安装结束后自动退出。")
+            for worker in list(self._active_tasks):
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+            self._close_poll.start()
+            return
+        self.vram_timer.stop()
+        self._close_poll.stop()
+        event.accept()
 

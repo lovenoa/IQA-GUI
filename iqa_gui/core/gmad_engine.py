@@ -143,9 +143,12 @@ class GMADEngine:
         metric_b: str,
         tolerance: float = 0.1,
         on_progress: Optional[Callable[[str, int, int], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> GMADResult:
         """Run complete gMAD analysis over candidate images."""
         self.reset_cancellation()
+        def cancelled():
+            return self._cancel_event.is_set() or bool(cancel_check and cancel_check())
         total = len(image_paths)
         if total < 2:
             raise ValueError("gMAD 对抗分析至少需要 2 张候选图片。")
@@ -162,7 +165,7 @@ class GMADEngine:
         if on_progress:
             on_progress(f"正在计算指标 A: {metric_a}...", 0, total)
         for idx, img in enumerate(image_paths):
-            if self._cancel_event.is_set():
+            if cancelled():
                 raise InterruptedError("gMAD 运算已取消。")
             res_a = self.evaluator.evaluate_single(metric_a, img)
             raw_a.append(res_a.score)
@@ -173,7 +176,7 @@ class GMADEngine:
         if on_progress:
             on_progress(f"正在计算指标 B: {metric_b}...", 0, total)
         for idx, img in enumerate(image_paths):
-            if self._cancel_event.is_set():
+            if cancelled():
                 raise InterruptedError("gMAD 运算已取消。")
             res_b = self.evaluator.evaluate_single(metric_b, img)
             raw_b.append(res_b.score)

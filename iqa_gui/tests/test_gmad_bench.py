@@ -36,6 +36,7 @@ def test_find_best_pair():
     assert (best["first_index"], best["second_index"]) in [(0, 1), (1, 0)]
 
 
+@pytest.mark.integration
 def test_gmad_execution():
     assert len(SAMPLE_IMAGES) >= 2
     engine = GMADEngine(device="cpu")
@@ -62,6 +63,7 @@ def test_compute_correlation_metrics():
     assert rmse < 0.3
 
 
+@pytest.mark.integration
 def test_benchmark_from_csv():
     engine = BenchmarkEngine(device="cpu")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -69,9 +71,9 @@ def test_benchmark_from_csv():
         with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["image", "mos"])
-            for img in SAMPLE_IMAGES:
+            for index, img in enumerate(SAMPLE_IMAGES):
                 # Use relative filename from DIST_DIR
-                writer.writerow([os.path.basename(img), "65.5"])
+                writer.writerow([os.path.basename(img), str(65.5 - 5 * index)])
 
         res = engine.run_benchmark_from_csv(
             dataset_name="MiniTest",

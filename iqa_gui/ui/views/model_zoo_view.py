@@ -25,14 +25,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from iqa_gui.config import apply_hf_mirror, load_settings, save_settings
+from iqa_gui.config import SettingsSaveError, apply_hf_mirror, load_settings, update_settings
 from iqa_gui.core.evaluator import EvaluatorEngine
 from iqa_gui.core.model_manager import (
     CATEGORY_NAMES,
     MetricInfo,
     ModelManager,
 )
-from iqa_gui.core.worker_threads import PreloadWeightsWorker, SafePackageInstallerWorker
+from iqa_gui.core.worker_threads import PreloadWeightsWorker, SafePackageInstallerWorker, launch_worker
 
 
 class ModelZooView(QWidget):
@@ -43,6 +43,8 @@ class ModelZooView(QWidget):
         self.evaluator = evaluator_engine
         self.model_manager = ModelManager()
         self.preload_worker: Optional[PreloadWeightsWorker] = None
+        self._preload_busy = False
+        self._install_busy = False
         self._current_filtered_models: List[MetricInfo] = []
 
         self._init_ui()
@@ -157,12 +159,19 @@ class ModelZooView(QWidget):
         main_layout.addWidget(splitter, 1)
 
     def _on_mirror_toggled(self, checked: bool) -> None:
-        settings = load_settings()
-        settings["hf_mirror_enabled"] = checked
-        save_settings(settings)
-        apply_hf_mirror(checked)
-        status = "已启用国内镜像加速 (https://hf-mirror.com)" if checked else "已切换回 Hugging Face 官方源"
-        QMessageBox.information(self, "网络镜像设置更新", status)
+        try:
+            settings = update_settings({"hf_mirror_enabled": checked})
+        except SettingsSaveError as exc:
+            self.chk_mirror.blockSignals(True)
+            self.chk_mirror.setChecked(not checked)
+            self.chk_mirror.blockSignals(False)
+            QMessageBox.warning(self, "镜像设置未保存", str(exc))
+            return
+        endpoint = settings.get("hf_mirror_endpoint", "https://hf-mirror.com")
+        apply_hf_mirror(checked, endpoint)
+        status = f"pyiqa 直接 Hugging Face 权重下载将使用 {endpoint}。" if checked else "pyiqa 直接 Hugging Face 权重下载将使用官方源。"
+        status += "\n已导入的 Hugging Face 客户端需要重启应用后生效；不覆盖 PyTorch、GitHub 等其他下载源。"
+        QMessageBox.information(self, "网络镜像设置已保存", status)
 
     def refresh_catalog(self) -> None:
         """Filter and update model table."""
@@ -216,14 +225,8 @@ class ModelZooView(QWidget):
         self._update_cache_summary()
 
     def _update_cache_summary(self) -> None:
-        cached_files = self.model_manager.get_cached_weights()
-        cache_dir = self.model_manager.cache_dir
-        total_size_mb = 0.0
-        if cache_dir.exists():
-            for f in cache_dir.iterdir():
-                if f.is_file():
-                    total_size_mb += f.stat().st_size / (1024 * 1024)
-        self.lbl_cache_summary.setText(f"本地权重缓存: {len(cached_files)} 个文件 ({total_size_mb:.1f} MB)")
+        count, size_bytes = self.model_manager.get_cache_summary()
+        self.lbl_cache_summary.setText(f"本地权重缓存: {count} 个文件 ({size_bytes / (1024 * 1024):.1f} MB)")
 
     def _on_table_selection(self) -> None:
         selected_rows = self.table.selectionModel().selectedRows()
@@ -258,10 +261,13 @@ class ModelZooView(QWidget):
                 f"<b>【功能与原理说明】</b><br>{info.description_zh}"
             )
             self.txt_desc.setHtml(details_html)
-            self.btn_download_single.setEnabled(info.requires_weights and dep_status.is_ready)
+            self.btn_download_single.setEnabled(info.requires_weights and dep_status.is_ready and not self._preload_busy and not self._install_busy)
             self.btn_install_dep.setVisible(not dep_status.is_ready)
+            self.btn_install_dep.setEnabled(not self._install_busy and not self._preload_busy)
 
     def _install_selected_deps(self) -> None:
+        if self._install_busy or self._preload_busy:
+            return
         selected_rows = self.table.selectionModel().selectedRows()
         if not selected_rows:
             return
@@ -271,13 +277,17 @@ class ModelZooView(QWidget):
             return
 
         packages = dep_status.missing_required
-        progress_dialog = QProgressDialog(f"正在安全安装组件: {', '.join(packages)}...", "后台运行", 0, 0, self)
-        progress_dialog.setWindowTitle("安全安装扩展组件")
+        progress_dialog = QProgressDialog(f"正在检查版本约束并安装组件: {', '.join(packages)}...", "后台运行", 0, 0, self)
+        progress_dialog.setWindowTitle("受约束安装扩展组件")
         progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         progress_dialog.show()
 
         worker = SafePackageInstallerWorker(packages, parent=self)
         self._installer_worker = worker
+        self._install_busy = True
+        self.btn_install_dep.setEnabled(False)
+        self.btn_download_single.setEnabled(False)
+        self.btn_preload_popular.setEnabled(False)
         worker.progress.connect(lambda txt: progress_dialog.setLabelText(f"正在安装: {txt[:40]}..."))
 
         def on_finished(success: bool, msg: str):
@@ -290,8 +300,16 @@ class ModelZooView(QWidget):
             self.refresh_catalog()
             self._on_table_selection()
 
-        worker.finished.connect(on_finished)
-        worker.start()
+        def on_thread_finished():
+            self._install_busy = False
+            progress_dialog.close()
+            self.btn_preload_popular.setEnabled(True)
+            self._on_table_selection()
+
+        worker.result_ready.connect(on_finished)
+        worker.finished.connect(on_thread_finished)
+        if launch_worker(worker, self) is False:
+            on_thread_finished()
 
     def _download_selected(self) -> None:
         selected_rows = self.table.selectionModel().selectedRows()
@@ -305,17 +323,28 @@ class ModelZooView(QWidget):
         self._start_preload(popular)
 
     def _start_preload(self, metrics: List[str]) -> None:
+        if self._preload_busy or self._install_busy:
+            return
+        self._preload_busy = True
         self.btn_preload_popular.setEnabled(False)
         self.btn_download_single.setEnabled(False)
+        self.btn_install_dep.setEnabled(False)
 
         self.preload_worker = PreloadWeightsWorker(evaluator=self.evaluator, metrics=metrics)
         self.preload_worker.progress.connect(lambda msg, cur, tot: self.lbl_cache_summary.setText(f"{msg} ({cur}/{tot})"))
-        self.preload_worker.finished.connect(self._on_preload_finished)
-        self.preload_worker.start()
+        self.preload_worker.result_ready.connect(self._on_preload_finished)
+        self.preload_worker.error.connect(lambda message: QMessageBox.warning(self, "模型权重载入失败", message))
+        self.preload_worker.cancelled.connect(lambda: self.lbl_cache_summary.setText("权重载入已取消"))
+        self.preload_worker.finished.connect(self._on_preload_thread_finished)
+        if launch_worker(self.preload_worker, self) is False:
+            self._on_preload_thread_finished()
+
+    def _on_preload_thread_finished(self) -> None:
+        self._preload_busy = False
+        self.btn_preload_popular.setEnabled(True)
+        self._on_table_selection()
 
     def _on_preload_finished(self, succeeded: list, failed: list) -> None:
-        self.btn_preload_popular.setEnabled(True)
-        self.btn_download_single.setEnabled(True)
         self.refresh_catalog()
 
         msg = f"权重载入完成。成功: {len(succeeded)} 个"

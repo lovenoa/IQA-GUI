@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
 
 from iqa_gui.core.batch_evaluator import BatchEvaluator, BatchItem, BatchSummary
 from iqa_gui.core.evaluator import EvaluatorEngine
-from iqa_gui.core.worker_threads import BatchEvalWorker
+from iqa_gui.config import load_settings, update_settings, SettingsSaveError
+from iqa_gui.core.worker_threads import BatchEvalWorker, launch_worker
 from iqa_gui.ui.components.metric_selector import MetricSelectorWidget
 from iqa_gui.ui.components.progress_bar import TaskProgressWidget
 from iqa_gui.ui.components.results_table import ResultsTableWidget
@@ -106,7 +107,9 @@ class BatchEvalView(QWidget):
         top_splitter.addWidget(folder_card)
 
         # Right: Metric selector (multi-select)
-        self.metric_selector = MetricSelectorWidget(multi_select=True, parent=self)
+        self.metric_selector = MetricSelectorWidget(
+            multi_select=True, parent=self,
+            allowed_metrics=self.batch_engine.model_manager.workflow_metrics("batch"))
         top_splitter.addWidget(self.metric_selector)
 
         top_splitter.setStretchFactor(0, 5)
@@ -123,7 +126,10 @@ class BatchEvalView(QWidget):
         main_layout.addWidget(self.results_table, 5)
 
         # Select anime presets by default
-        self.metric_selector.select_anime_presets()
+        self.metric_selector.set_selected(["brisque", "niqe"])
+        settings = load_settings()
+        self.edit_target_dir.setText(settings.get("last_target_dir", ""))
+        self.edit_ref_dir.setText(settings.get("last_ref_dir", ""))
 
     def _browse_target_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择待评估图像文件夹")
@@ -137,6 +143,9 @@ class BatchEvalView(QWidget):
 
     def start_batch(self) -> None:
         """Scan folders, initialize table, and launch worker."""
+        if getattr(self.window(), "_active_tasks", None):
+            self.progress_widget.lbl_status.setText("请等待当前任务及清理结束。")
+            return
         tar_dir = self.edit_target_dir.text().strip()
         ref_dir = self.edit_ref_dir.text().strip() or None
         pair_mode = self.combo_pair_mode.currentData()
@@ -173,18 +182,36 @@ class BatchEvalView(QWidget):
         self.results_table.set_batch(items, metrics)
         self.progress_widget.set_running(True, f"准备开始批量评估，共 {len(items)} 张图片...")
         self.btn_start.setEnabled(False)
+        try:
+            update_settings({"last_target_dir": tar_dir, "last_ref_dir": ref_dir or ""})
+        except SettingsSaveError as exc:
+            self.progress_widget.lbl_status.setText(f"路径记忆未保存，本次评估仍可继续: {exc}")
 
         # Launch worker
         self.active_worker = BatchEvalWorker(
             batch_evaluator=self.batch_engine,
             items=items,
             metrics=metrics,
+            auto_release_vram=getattr(self.window(), "auto_release_vram", load_settings().get("auto_release_vram", True)),
         )
         self.active_worker.progress.connect(self._on_batch_progress)
         self.active_worker.item_finished.connect(self.results_table.update_item)
-        self.active_worker.finished.connect(self._on_batch_finished)
+        self.active_worker.result_ready.connect(self._on_batch_finished)
+        self.active_worker.finished.connect(self._on_thread_finished)
+        self.active_worker.cancelled.connect(self._on_batch_cancelled)
         self.active_worker.error.connect(self._on_batch_error)
-        self.active_worker.start()
+        if not launch_worker(self.active_worker, self):
+            self.active_worker = None
+            self.progress_widget.set_running(False, "已有任务，请等待结束后再开始。")
+            self._on_thread_finished()
+
+    def _on_thread_finished(self):
+        self.btn_start.setEnabled(True)
+        self.progress_widget.btn_cancel.setEnabled(False)
+
+    def _on_batch_cancelled(self):
+        self.progress_widget.set_running(False, "批量评估已停止，保留已完成的结果行。")
+        self.results_table.lbl_stats.setText("已停止；未处理行不计入完成结果。")
 
     def cancel_batch(self) -> None:
         """Cancel batch execution."""
@@ -199,9 +226,8 @@ class BatchEvalView(QWidget):
     def _on_batch_finished(self, summary: BatchSummary) -> None:
         self.progress_widget.set_running(False, f"批量评估完成。共处理 {summary.completed_images} 项，耗时 {summary.total_time_seconds:.1f} 秒")
         self.results_table.set_summary(summary)
-        self.btn_start.setEnabled(True)
 
     def _on_batch_error(self, err_msg: str) -> None:
         self.progress_widget.set_running(False, f"评估异常终止: {err_msg}")
-        self.btn_start.setEnabled(True)
-        QMessageBox.critical(self, "批量评估出错", f"批处理过程中遇到错误:\n{err_msg}")
+        if not getattr(self.window(), "_closing", False):
+            QMessageBox.critical(self, "批量评估出错", f"批处理过程中遇到错误:\n{err_msg}")

@@ -13,6 +13,7 @@ SAMPLE_DIST = os.path.join(DIST_DIR, "I03.bmp")
 SAMPLE_REF = os.path.join(REF_DIR, "I03.bmp")
 
 
+@pytest.mark.integration
 def test_single_evaluator():
     engine = EvaluatorEngine(device="cpu")
 
@@ -144,6 +145,7 @@ def test_distribution_metrics_in_single_eval():
             engine.evaluate_single(m, SAMPLE_DIST)
 
 
+@pytest.mark.integration
 def test_step_by_step_vram_release():
     from iqa_gui.core.worker_threads import SingleEvalWorker
     engine = EvaluatorEngine(device="cpu")
@@ -204,6 +206,7 @@ def test_score_range_and_normalized_quality():
     assert len(res.grade_desc) > 0
 
 
+@pytest.mark.integration
 def test_multi_target_single_eval_worker():
     from iqa_gui.core.worker_threads import SingleEvalWorker
     engine = EvaluatorEngine(device="cpu")
@@ -251,6 +254,7 @@ def test_variable_metrics_diagnostic_warning():
     assert "可能浮动" in res_qalign.grade_desc
 
 
+@pytest.mark.integration
 def test_multi_round_single_eval_worker():
     from iqa_gui.core.worker_threads import SingleEvalWorker
     engine = EvaluatorEngine(device="cpu")

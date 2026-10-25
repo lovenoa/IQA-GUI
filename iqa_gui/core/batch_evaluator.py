@@ -125,25 +125,24 @@ class BatchEvaluator:
         metrics: List[str],
         on_progress: Optional[Callable[[int, int, BatchItem, float], None]] = None,
         on_item_finished: Optional[Callable[[BatchItem], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> BatchSummary:
         """Run batch evaluation across items and metrics."""
+        if not metrics or any(not self.model_manager.supports_workflow(m, "batch") for m in metrics):
+            raise ValueError("当前逐张批量流程不支持所选集合/提示词算法，请选择适用的图像指标。")
         self.reset_cancellation()
+        def cancelled():
+            return self._cancel_event.is_set() or bool(cancel_check and cancel_check())
         total_items = len(items)
         completed = 0
         failed = 0
         batch_start = time.perf_counter()
 
-        # Preload models to avoid repeating loading overhead
-        for m in metrics:
-            if self._cancel_event.is_set():
-                break
-            try:
-                self.engine.get_or_create_metric(m)
-            except Exception as e:
-                print(f"Error preloading metric {m}: {e}")
+        # Load lazily after input validation; the evaluator caches valid models.
+        # Invalid FR pairs must not trigger eager downloads of large weights.
 
         for idx, item in enumerate(items):
-            if self._cancel_event.is_set():
+            if cancelled():
                 break
 
             item_start = time.perf_counter()
@@ -151,7 +150,7 @@ class BatchEvaluator:
             all_succeeded = True
 
             for metric_name in metrics:
-                if self._cancel_event.is_set():
+                if cancelled():
                     break
                 try:
                     res = self.engine.evaluate_single(
@@ -167,7 +166,7 @@ class BatchEvaluator:
 
             item.time_taken = time.perf_counter() - item_start
 
-            if self._cancel_event.is_set():
+            if cancelled():
                 item.status = "cancelled"
                 break
 

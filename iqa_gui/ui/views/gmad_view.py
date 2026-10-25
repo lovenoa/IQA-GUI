@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 from iqa_gui.core.evaluator import EvaluatorEngine
 from iqa_gui.core.gmad_engine import GMADEngine, GMADPairResult, GMADResult
 from iqa_gui.core.model_manager import ModelManager
-from iqa_gui.core.worker_threads import GMADWorker
+from iqa_gui.config import load_settings
+from iqa_gui.core.worker_threads import GMADWorker, launch_worker
 from iqa_gui.ui.components.image_viewer import ImageViewerCard
 
 
@@ -85,7 +86,8 @@ class GMADView(QWidget):
         self.combo_b = QComboBox()
 
         # Populate NR metrics
-        nr_models = self.model_manager.filter(mode="NR")
+        allowed = set(self.model_manager.workflow_metrics("gmad", mode="NR"))
+        nr_models = [m for m in self.model_manager.filter(mode="NR") if m.name in allowed]
         for m in nr_models:
             self.combo_a.addItem(f"{m.name} ({m.display_name})", m.name)
             self.combo_b.addItem(f"{m.name} ({m.display_name})", m.name)
@@ -119,6 +121,10 @@ class GMADView(QWidget):
         grid.addWidget(lbl_tol, 2, 0)
         grid.addWidget(self.spin_tol, 2, 1)
         grid.addWidget(self.btn_run, 2, 2, 1, 2)
+        self.btn_cancel = QPushButton("停止")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel_gmad)
+        grid.addWidget(self.btn_cancel, 2, 4)
 
         cfg_layout.addLayout(grid)
         main_layout.addWidget(config_card)
@@ -187,6 +193,9 @@ class GMADView(QWidget):
 
     def start_gmad(self) -> None:
         """Collect images and launch gMAD analysis."""
+        if getattr(self.window(), "_active_tasks", None):
+            self.lbl_status.setText("请等待当前任务及清理结束。")
+            return
         folder = self.edit_dir.text().strip()
         if not folder or not os.path.isdir(folder):
             QMessageBox.warning(self, "路径错误", "请先选择有效的候选图片文件夹！")
@@ -207,6 +216,7 @@ class GMADView(QWidget):
         tol = self.spin_tol.value()
 
         self.btn_run.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
         self.btn_run.setText("正在进行对抗比对...")
         self.lbl_status.setText("正在执行候选池全量打分与标准化...")
 
@@ -216,15 +226,29 @@ class GMADView(QWidget):
             metric_a=metric_a,
             metric_b=metric_b,
             tolerance=tol,
+            auto_release_vram=getattr(self.window(), "auto_release_vram", load_settings().get("auto_release_vram", True)),
         )
         self.active_worker.progress.connect(lambda msg, cur, tot: self.lbl_status.setText(f"{msg} ({cur}/{tot})"))
-        self.active_worker.finished.connect(self._on_gmad_finished)
+        self.active_worker.result_ready.connect(self._on_gmad_finished)
+        self.active_worker.finished.connect(self._on_thread_finished)
+        self.active_worker.cancelled.connect(lambda: self.lbl_status.setText("对抗分析已停止。"))
         self.active_worker.error.connect(self._on_gmad_error)
-        self.active_worker.start()
+        if not launch_worker(self.active_worker, self):
+            self.active_worker = None
+            self.lbl_status.setText("已有任务，请等待结束后再开始。")
+            self._on_thread_finished()
 
-    def _on_gmad_finished(self, res: GMADResult) -> None:
+    def cancel_gmad(self):
+        if self.active_worker and self.active_worker.isRunning():
+            self.lbl_status.setText("正在停止，等待当前计算安全结束...")
+            self.active_worker.cancel()
+
+    def _on_thread_finished(self):
         self.btn_run.setEnabled(True)
         self.btn_run.setText("开始 gMAD 对抗分析")
+        self.btn_cancel.setEnabled(False)
+
+    def _on_gmad_finished(self, res: GMADResult) -> None:
         self.lbl_status.setText(f"对抗分析完成。共检索 {res.total_images} 张候选图像。")
 
         # Update Pair A
@@ -240,6 +264,8 @@ class GMADView(QWidget):
             self.card_pair_a["v2"].load_image(p.image_2.image_path)
         else:
             self.card_pair_a["info"].setText(f"在容差 {res.tolerance} 下未找到符合算法 A 相等条件的候选图对。")
+            self.card_pair_a["v1"].clear_all_images()
+            self.card_pair_a["v2"].clear_all_images()
 
         # Update Pair B
         if res.pair_b_tie:
@@ -254,9 +280,10 @@ class GMADView(QWidget):
             self.card_pair_b["v2"].load_image(p.image_2.image_path)
         else:
             self.card_pair_b["info"].setText(f"在容差 {res.tolerance} 下未找到符合算法 B 相等条件的候选图对。")
+            self.card_pair_b["v1"].clear_all_images()
+            self.card_pair_b["v2"].clear_all_images()
 
     def _on_gmad_error(self, err_msg: str) -> None:
-        self.btn_run.setEnabled(True)
-        self.btn_run.setText("开始 gMAD 对抗分析")
         self.lbl_status.setText(f"运行失败: {err_msg}")
-        QMessageBox.critical(self, "gMAD 运算失败", f"分析失败:\n{err_msg}")
+        if not getattr(self.window(), "_closing", False):
+            QMessageBox.critical(self, "gMAD 运算失败", f"分析失败:\n{err_msg}")

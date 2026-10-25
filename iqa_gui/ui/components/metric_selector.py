@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Set
-from PySide6.QtCore import Qt, Signal
+from typing import Any, Dict, Iterable, List, Optional, Set
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -20,17 +20,19 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 
-from iqa_gui.config import load_settings, save_settings
+from iqa_gui.config import SettingsSaveError, load_settings, save_settings
 from iqa_gui.core.model_manager import (
     CATEGORY_NAMES,
     MetricInfo,
     ModelManager,
 )
-from iqa_gui.core.worker_threads import SafePackageInstallerWorker
+from iqa_gui.core.worker_threads import SafePackageInstallerWorker, launch_worker
 
 # 常用预设算法组合
 RECOMMENDED_AESTHETIC_PRESETS = [
@@ -55,11 +57,15 @@ class MetricSelectorWidget(QFrame):
         multi_select: bool = True,
         mode_filter: Optional[str] = None,  # None, 'FR', 'NR'
         parent: Optional[QWidget] = None,
+        allowed_metrics: Optional[Iterable[str]] = None,
     ):
         super().__init__(parent)
         self.setProperty("class", "CardFrame")
         self.multi_select = multi_select
         self.mode_filter = mode_filter
+        self.allowed_metrics = None if allowed_metrics is None else set(allowed_metrics)
+        self._clicked_check_indicator = False
+        self._installer_worker = None
         self.model_manager = ModelManager()
 
         self._selected_metrics: Set[str] = set()
@@ -135,6 +141,7 @@ class MetricSelectorWidget(QFrame):
         self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.list_widget.itemChanged.connect(self._on_item_changed)
         self.list_widget.itemClicked.connect(self._on_item_clicked)
+        self.list_widget.viewport().installEventFilter(self)
         layout.addWidget(self.list_widget, 1)
 
         # 4. Bottom Selected Chips & Summary Bar
@@ -179,6 +186,8 @@ class MetricSelectorWidget(QFrame):
 
         visible_count = 0
         for info in self._all_models:
+            if self.allowed_metrics is not None and info.name not in self.allowed_metrics:
+                continue
             # Mode filter
             if self.mode_filter and info.mode != self.mode_filter:
                 continue
@@ -249,13 +258,31 @@ class MetricSelectorWidget(QFrame):
         if item.checkState() == Qt.CheckState.Checked:
             dep_status = self.model_manager.check_dependencies(name)
             if not dep_status.is_ready:
+                self._selected_metrics.discard(name)
+                self.list_widget.blockSignals(True)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self.list_widget.blockSignals(False)
                 self._prompt_missing_dependencies(name, dep_status, item)
                 return
             self._selected_metrics.add(name)
         else:
             self._selected_metrics.discard(name)
         self._update_summary_label()
-        self.selection_changed.emit(list(self._selected_metrics))
+        self.selection_changed.emit(self.get_selected())
+
+    def eventFilter(self, watched, event):
+        if watched is self.list_widget.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            item = self.list_widget.itemAt(event.position().toPoint())
+            self._clicked_check_indicator = False
+            if item is not None and self.multi_select:
+                option = QStyleOptionViewItem()
+                option.initFrom(self.list_widget)
+                option.rect = self.list_widget.visualItemRect(item)
+                option.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+                rect = self.list_widget.style().subElementRect(
+                    QStyle.SubElement.SE_ItemViewItemCheckIndicator, option, self.list_widget)
+                self._clicked_check_indicator = rect.contains(event.position().toPoint())
+        return super().eventFilter(watched, event)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         name = item.data(Qt.ItemDataRole.UserRole)
@@ -267,7 +294,7 @@ class MetricSelectorWidget(QFrame):
             self._selected_metrics = {name}
             self._update_summary_label()
             self.selection_changed.emit([name])
-        else:
+        elif not self._clicked_check_indicator:
             # Toggle check on click for effortless zero-code mouse operation
             new_state = Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked
             item.setCheckState(new_state)
@@ -284,7 +311,8 @@ class MetricSelectorWidget(QFrame):
             f"<h3>算法【{disp_name}】需要安装支持组件</h3>"
             f"<p>检测到当前环境尚未安装：<b>{missing_str}</b></p>"
             f"<p><b>【环境说明】</b><br>"
-            f"• 安装将仅下载该模型必需的扩展组件，<b>保留现有 PyTorch 与 GPU 驱动环境</b>，不影响核心依赖。<br>"
+            f"• 安装会约束当前已安装依赖的版本；发现版本冲突时停止，不自动替换现有核心包。<br>"
+            f"• 这不能保证所有扩展与当前环境兼容；安装后请重启并验证运行环境。<br>"
             f"• 进度将在后台控制台输出。</p>"
             f"<p>是否立即安装？</p>"
         )
@@ -310,33 +338,47 @@ class MetricSelectorWidget(QFrame):
                 self.list_widget.blockSignals(False)
 
     def _start_safe_install(self, packages: List[str], target_metric_name: str) -> None:
-        progress_dialog = QProgressDialog(f"正在安全安装组件: {', '.join(packages)}...", "后台运行", 0, 0, self)
-        progress_dialog.setWindowTitle("安全安装扩展组件")
+        if self._installer_worker is not None and self._installer_worker.isRunning():
+            return
+        progress_dialog = QProgressDialog(f"正在按当前依赖版本约束安装组件: {', '.join(packages)}...", "后台运行", 0, 0, self)
+        progress_dialog.setWindowTitle("受约束安装扩展组件")
         progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         progress_dialog.show()
 
         worker = SafePackageInstallerWorker(packages, parent=self)
         self._installer_worker = worker
+        controls = [self.list_widget, self.combo_presets, self.btn_save_preset, self.btn_manage_preset]
+        if self.multi_select:
+            controls.extend([self.btn_select_all, self.btn_clear])
+        for control in controls:
+            control.setEnabled(False)
         worker.progress.connect(lambda txt: progress_dialog.setLabelText(f"正在安装: {txt[:40]}..."))
 
-        def on_finished(success: bool, msg: str):
+        result = []
+        worker.result_ready.connect(lambda success, msg: result.append((success, msg)))
+
+        def on_finished():
             progress_dialog.close()
+            for control in controls:
+                control.setEnabled(True)
+            self._installer_worker = None
             self.model_manager.clear_dependency_cache()
+            success, msg = result[-1] if result else (False, "安装线程已结束，但未返回结果。")
             if success:
                 QMessageBox.information(self, "组件安装完成", msg)
-                self.apply_filter()
-                if self.multi_select:
-                    self._selected_metrics.add(target_metric_name)
-                else:
-                    self._selected_metrics = {target_metric_name}
-                self._update_summary_label()
-                self.selection_changed.emit(list(self._selected_metrics))
+                names = self.get_selected() + [target_metric_name] if self.multi_select else [target_metric_name]
+                self.set_selected(names)
             else:
                 QMessageBox.warning(self, "组件安装提示", msg)
                 self.apply_filter()
 
         worker.finished.connect(on_finished)
-        worker.start()
+        if not launch_worker(worker, self):
+            progress_dialog.close()
+            for control in controls:
+                control.setEnabled(True)
+            self._installer_worker = None
+            worker.deleteLater()
 
 
     def _update_summary_label(self) -> None:
@@ -376,15 +418,19 @@ class MetricSelectorWidget(QFrame):
             if item.data(Qt.ItemDataRole.UserRole) == metric_name:
                 item.setCheckState(Qt.CheckState.Unchecked)
         self._update_summary_label()
-        self.selection_changed.emit(list(self._selected_metrics))
+        self.selection_changed.emit(self.get_selected())
 
     def get_selected(self) -> List[str]:
-        return list(self._selected_metrics)
+        return sorted(self._selected_metrics)
 
     def set_selected(self, metric_names: List[str]) -> None:
-        self._selected_metrics = set(metric_names)
+        allowed = {info.name for info in self._all_models
+                   if (self.allowed_metrics is None or info.name in self.allowed_metrics)
+                   and (not self.mode_filter or info.mode == self.mode_filter)}
+        self._selected_metrics = {name for name in metric_names if name in allowed
+                                  and self.model_manager.check_dependencies(name).is_ready}
         self.apply_filter()
-        self.selection_changed.emit(list(self._selected_metrics))
+        self.selection_changed.emit(self.get_selected())
 
     def set_tips_visible(self, visible: bool) -> None:
         """Toggle visibility of operational hints."""
@@ -438,7 +484,11 @@ class MetricSelectorWidget(QFrame):
             if "metric_presets" not in settings:
                 settings["metric_presets"] = {}
             settings["metric_presets"][preset_name] = sorted(list(self._selected_metrics))
-            save_settings(settings)
+            try:
+                save_settings(settings)
+            except SettingsSaveError as exc:
+                QMessageBox.warning(self, "保存失败", str(exc))
+                return
             self._populate_presets_combo(select_name=preset_name)
             QMessageBox.information(self, "保存成功", f"算法组合【{preset_name}】已成功保存。")
 
@@ -471,7 +521,11 @@ class MetricSelectorWidget(QFrame):
             if reply == QMessageBox.StandardButton.Yes:
                 settings = load_settings()
                 settings.setdefault("metric_presets", {})[current_preset] = sorted(list(self._selected_metrics))
-                save_settings(settings)
+                try:
+                    save_settings(settings)
+                except SettingsSaveError as exc:
+                    QMessageBox.warning(self, "保存失败", str(exc))
+                    return
                 self._populate_presets_combo(select_name=current_preset)
                 QMessageBox.information(self, "更新成功", f"组合【{current_preset}】已更新为当前选择。")
 
@@ -486,7 +540,11 @@ class MetricSelectorWidget(QFrame):
                 settings = load_settings()
                 if "metric_presets" in settings and current_preset in settings["metric_presets"]:
                     del settings["metric_presets"][current_preset]
-                    save_settings(settings)
+                    try:
+                        save_settings(settings)
+                    except SettingsSaveError as exc:
+                        QMessageBox.warning(self, "保存失败", str(exc))
+                        return
                     self._populate_presets_combo()
                     QMessageBox.information(self, "删除成功", f"组合【{current_preset}】已删除。")
 
@@ -516,10 +574,9 @@ class MetricSelectorWidget(QFrame):
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
             name = item.data(Qt.ItemDataRole.UserRole)
-            self._selected_metrics.add(name)
-            item.setCheckState(Qt.CheckState.Checked)
-        self._update_summary_label()
-        self.selection_changed.emit(list(self._selected_metrics))
+            if self.model_manager.check_dependencies(name).is_ready:
+                self._selected_metrics.add(name)
+        self.set_selected(self.get_selected())
 
     def clear_selection(self) -> None:
         """Clear all selections."""

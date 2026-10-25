@@ -104,5 +104,7 @@ class ResultExporter:
             ],
         }
 
+        # Validate before opening/truncating an existing report.
+        payload = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write(payload)

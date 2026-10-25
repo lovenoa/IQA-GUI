@@ -1,0 +1,10 @@
+# Direct application dependencies matching the local 2026-10-25 validation.
+# Install an appropriate torch/torchvision build first (see README.md).
+# These pins are not a complete lock of pyiqa's transitive dependencies.
+PySide6==6.12.0
+pyiqa==0.1.16
+numpy==2.5.4
+Pillow==13.0.0
+scipy==1.18.1
+packaging==26.3
+openai-clip==1.0.1

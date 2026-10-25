@@ -23,6 +23,21 @@ from iqa_gui.core.batch_evaluator import BatchItem, BatchSummary
 from iqa_gui.core.exporter import ResultExporter
 
 
+class _NumericItem(QTableWidgetItem):
+    """Keep formatted display text while sorting on the underlying number."""
+
+    def __init__(self, text: str, value: Optional[float]):
+        super().__init__(text)
+        self.setData(Qt.ItemDataRole.UserRole + 1, value)
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        left = self.data(Qt.ItemDataRole.UserRole + 1)
+        right = other.data(Qt.ItemDataRole.UserRole + 1)
+        if left is None or right is None:
+            return left is None and right is not None
+        return left < right
+
+
 class ResultsTableWidget(QFrame):
     """Table widget for displaying and exporting batch evaluation results."""
     row_selected = Signal(object)  # Emits selected BatchItem
@@ -109,15 +124,23 @@ class ResultsTableWidget(QFrame):
 
     def update_item(self, item: BatchItem) -> None:
         """Update a specific item in the table as it finishes."""
-        row = item.index - 1
-        if 0 <= row < self.table.rowCount():
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) != item.index:
+                continue
+            for idx, current in enumerate(self.current_items):
+                if current.index == item.index:
+                    self.current_items[idx] = item
+                    break
+            sorting = self.table.isSortingEnabled()
             self.table.setSortingEnabled(False)
             self._set_row_data(row, item)
-            self.table.setSortingEnabled(True)
+            self.table.setSortingEnabled(sorting)
+            break
 
     def _set_row_data(self, row: int, item: BatchItem) -> None:
         # Index
-        item_idx = QTableWidgetItem(str(item.index))
+        item_idx = _NumericItem(str(item.index), item.index)
+        item_idx.setData(Qt.ItemDataRole.UserRole, item.index)
         item_idx.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setItem(row, 0, item_idx)
 
@@ -150,7 +173,7 @@ class ResultsTableWidget(QFrame):
 
         # Time taken
         time_str = f"{item.time_taken:.2f}" if item.time_taken > 0 else "-"
-        item_time = QTableWidgetItem(time_str)
+        item_time = _NumericItem(time_str, item.time_taken if item.time_taken > 0 else None)
         item_time.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setItem(row, 4, item_time)
 
@@ -159,7 +182,7 @@ class ResultsTableWidget(QFrame):
         for idx, m in enumerate(self.current_metrics):
             val = item.scores.get(m)
             score_str = f"{val:.4f}" if val is not None else "-"
-            item_score = QTableWidgetItem(score_str)
+            item_score = _NumericItem(score_str, val)
             item_score.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row, col_offset + idx, item_score)
 
@@ -184,8 +207,12 @@ class ResultsTableWidget(QFrame):
         selected_rows = self.table.selectionModel().selectedRows()
         if selected_rows:
             row = selected_rows[0].row()
-            if 0 <= row < len(self.current_items):
-                self.row_selected.emit(self.current_items[row])
+            cell = self.table.item(row, 0)
+            if cell is not None:
+                item_id = cell.data(Qt.ItemDataRole.UserRole)
+                item = next((item for item in self.current_items if item.index == item_id), None)
+                if item is not None:
+                    self.row_selected.emit(item)
 
     def _export_csv(self) -> None:
         if not self.current_items:

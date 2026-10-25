@@ -10,12 +10,16 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import torch.hub
 
+from iqa_gui.config import install_pyiqa_mirror_adapter
+
 try:
     import pyiqa
     from pyiqa.models.inference_model import DEFAULT_CONFIGS
 except ImportError:
     pyiqa = None
     DEFAULT_CONFIGS = {}
+
+install_pyiqa_mirror_adapter()
 
 # Categories for friendly grouping
 CATEGORY_FR_TRADITIONAL = "FR_TRADITIONAL"      # 全参考-传统统计学算法 (无需下载模型权重，速度极快)
@@ -64,6 +68,7 @@ class MetricInfo:
     required_packages: List[str] = field(default_factory=list)
     optional_packages: List[str] = field(default_factory=list)
     is_discovered: bool = False
+    required_weight_files: Optional[List[str]] = None  # None means resource completeness unknown
 
     @property
     def direction_str(self) -> str:
@@ -199,7 +204,6 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "score_range": "[0, 1]",
         "description_zh": "提取深度网络特征对比感知相似度，数值越小代表越接近原图视觉质感。",
         "requires_weights": True,
-        "default_weight_file": "v0.1_alex.pth",
         "tags": ["深度感知", "越低越好"],
     },
     "lpips-vgg": {
@@ -209,7 +213,6 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "score_range": "[0, 1]",
         "description_zh": "使用深层 VGG16 提取特征的 LPIPS，特征更细腻，但计算速度略低于 AlexNet 版本。",
         "requires_weights": True,
-        "default_weight_file": "v0.1_vgg.pth",
         "tags": ["深层特征", "越低越好"],
     },
     "dists": {
@@ -219,7 +222,7 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "score_range": "[0, 1]",
         "description_zh": "专门解耦图像结构与纹理。即使存在微小纹理变化或轻微几何位移，也能客观评判画质，避免过度惩罚无害纹理变化。",
         "requires_weights": True,
-        "default_weight_file": "dists_weights.pth",
+        "default_weight_file": "DISTS_weights-f5e65c96.pth",
         "tags": ["纹理容忍", "越低越好", "高推荐"],
     },
     "pieapp": {
@@ -267,7 +270,7 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "lower_better": True,
         "score_range": "[0, ~20+]",
         "description_zh": "无需任何人工主观打分标签训练！仅基于自然优质图像统计分布建模，偏离越小（分值越低）画质越优质自然。",
-        "requires_weights": False,
+        "requires_weights": True,
         "tags": ["无监督", "无需人工标签", "越低越好", "推荐"],
     },
     "piqe": {
@@ -285,7 +288,7 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "lower_better": True,
         "score_range": "[0, ~50+]",
         "description_zh": "在色彩空间融合亮度和纹理梯度的增强版 NIQE，对色偏、曝光失真评估更加敏感准确。",
-        "requires_weights": False,
+        "requires_weights": True,
         "tags": ["色彩敏感", "越低越好"],
     },
 
@@ -381,7 +384,7 @@ _METRIC_METADATA: Dict[str, Dict] = {
         "display_name": "CLIPScore (图文匹配度/语义对齐评分)",
         "category": CATEGORY_MULTIMODAL,
         "lower_better": False,
-        "score_range": "[0, ~100]",
+        "score_range": "[0, 2.5]",
         "description_zh": "评估画面内容与指定文字描述（提示词 Prompt）的语义贴合程度，AI生图（文生图）必备指标！",
         "requires_weights": True,
         "tags": ["文生图", "图文对齐", "Prompt打分", "推荐"],
@@ -480,6 +483,8 @@ class ModelManager:
             display_name = meta.get("display_name", f"{name.upper()} ({mode})")
             description_zh = meta.get("description_zh", f"pyiqa 官方模型 {name}，评估模式：{mode}。")
             requires_weights = meta.get("requires_weights", category not in [CATEGORY_FR_TRADITIONAL, CATEGORY_NR_TRADITIONAL])
+            if name in ("niqe_matlab", "nrqm", "pi", "brisque_matlab"):
+                requires_weights = True
             tags = meta.get("tags", [mode, "pyiqa"] + (["新探测"] if is_discovered else []))
 
             # Infer required & optional packages
@@ -522,7 +527,38 @@ class ModelManager:
                 optional_packages=opt_pkgs,
                 is_discovered=is_discovered,
             )
+            resources = self._known_resources(name)
+            info.required_weight_files = resources
+            if resources:
+                info.default_weight_file = resources[0]
             self._all_models[name] = info
+
+    @staticmethod
+    def _known_resources(name: str) -> Optional[List[str]]:
+        """Only declare complete lists verified against the installed implementation."""
+        from urllib.parse import urlsplit, unquote
+
+        def filename(url):
+            return unquote(Path(urlsplit(url).path).name)
+
+        try:
+            if name in ("niqe", "niqe_matlab", "ilniqe"):
+                from pyiqa.archs.niqe_arch import default_model_urls
+                return [filename(default_model_urls[name])]
+            if name == "dists":
+                from pyiqa.archs.dists_arch import default_model_urls
+                from torchvision.models import VGG16_Weights
+                return [filename(default_model_urls["url"]), filename(VGG16_Weights.IMAGENET1K_V1.url)]
+            if name in ("brisque", "brisque_matlab"):
+                from pyiqa.archs.brisque_arch import default_model_urls
+                return [filename(default_model_urls["url" if name == "brisque" else name])]
+            if name == "musiq":
+                from pyiqa.archs.musiq_arch import default_model_urls
+                return [filename(default_model_urls["koniq10k"])]
+        except (ImportError, KeyError, AttributeError, TypeError):
+            pass
+        # CLIP/LPIPS and dynamically selected backbones may need multiple files.
+        return None
 
     def list_all(self) -> List[MetricInfo]:
         """Return all available models."""
@@ -556,6 +592,22 @@ class ModelManager:
         """Return category IDs and descriptive labels."""
         return CATEGORY_NAMES.copy()
 
+    def supports_workflow(self, name: str, workflow: str = "single", has_prompt: bool = False) -> bool:
+        """Whether an image-by-image workflow can supply this metric's inputs."""
+        info = self.get_model(name)
+        if info is None or workflow not in ("single", "batch", "benchmark", "gmad"):
+            return False
+        if info.category == CATEGORY_DISTRIBUTION:
+            return False
+        if name.lower() == "clipscore":
+            return workflow == "single" and has_prompt
+        return True
+
+    def workflow_metrics(self, workflow: str = "single", has_prompt: bool = False,
+                         mode: Optional[str] = None) -> List[str]:
+        return [m.name for m in self.filter(mode=mode)
+                if self.supports_workflow(m.name, workflow, has_prompt)]
+
     def get_all_cache_roots(self) -> List[Path]:
         """Return all valid cache directories (Torch Hub, PyIQA, HuggingFace Hub, and CLIP)."""
         home = Path.home()
@@ -571,28 +623,53 @@ class ModelManager:
             candidates.append(Path(os.environ["HF_HOME"]) / "hub")
         if "TORCH_HOME" in os.environ:
             candidates.append(Path(os.environ["TORCH_HOME"]) / "hub")
-        return [c for c in candidates if c.exists()]
+        roots = {}
+        for candidate in candidates:
+            try:
+                if candidate.is_dir():
+                    roots.setdefault(os.path.normcase(str(candidate.resolve())), candidate)
+            except OSError:
+                continue
+        return list(roots.values())
 
-    def get_cached_weights(self) -> List[str]:
-        """List all downloaded weight files present across all cache directories."""
-        weights = set()
+    def get_cached_weight_files(self) -> List[Path]:
+        """Return physical paths once, even when configured roots overlap."""
+        weights = {}
         valid_exts = {".pth", ".pt", ".bin", ".safetensors", ".mat"}
         for root in self.get_all_cache_roots():
             try:
-                for f in root.glob("**/*"):
-                    if f.is_file() and f.suffix.lower() in valid_exts and not f.name.endswith(".partial"):
-                        weights.add(f.name)
-            except Exception:
-                pass
-        return sorted(list(weights))
+                for path in root.glob("**/*"):
+                    try:
+                        if path.is_file() and path.suffix.lower() in valid_exts:
+                            resolved = path.resolve()
+                            weights.setdefault(os.path.normcase(str(resolved)), resolved)
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+        return sorted(weights.values(), key=str)
+
+    def get_cache_summary(self) -> tuple[int, int]:
+        """Count and size use the same successfully inspected resource list."""
+        sizes = []
+        for path in self.get_cached_weight_files():
+            try:
+                sizes.append(path.stat().st_size)
+            except OSError:
+                continue
+        return len(sizes), sum(sizes)
+
+    def get_cached_weights(self) -> List[str]:
+        """List all downloaded weight files present across all cache directories."""
+        return sorted({path.name for path in self.get_cached_weight_files()})
 
     def is_cached(self, model_name: str) -> Optional[bool]:
         """Check whether the model's weight is present in the cache.
 
         Returns:
-            True: If the exact weight file exists in local cache, or the model requires no weights.
-            False: If the model has an explicit default_weight_file and it is not found on disk.
-            None: If the weight presence cannot be reliably determined (e.g. dynamic HuggingFace repos or multi-variant models).
+            True: All known required files exist, or no parameter file is needed.
+            False: At least one member of a known complete resource list is missing.
+            None: The complete resource requirements are unknown.
         """
         import urllib.parse
 
@@ -602,29 +679,11 @@ class ModelManager:
         if not info.requires_weights:
             return True  # Doesn't require weights (mathematical/statistical metrics)
 
-        # Strictly check only models with an explicit, unambiguous weight filename defined.
-        # If no explicit single weight file is known, do not guess or display false status.
-        if not info.default_weight_file:
+        # A linear head alone does not establish that its feature backbone exists.
+        if not info.required_weight_files:
             return None
-
-        exp_file = info.default_weight_file.strip().lower()
-
-        # Check explicit default weight file across cache roots
-        for root in self.get_all_cache_roots():
-            target = root / info.default_weight_file
-            if target.exists() and not target.name.endswith(".partial"):
-                return True
-            # Match unquoted name (e.g. sac+logos vs sac%2Blogos)
-            try:
-                for f in root.iterdir():
-                    if f.is_file() and not f.name.endswith(".partial"):
-                        unq = urllib.parse.unquote(f.name).lower()
-                        if unq == exp_file or f.name.lower() == exp_file:
-                            return True
-            except Exception:
-                pass
-
-        return False
+        present = {urllib.parse.unquote(path.name).casefold() for path in self.get_cached_weight_files()}
+        return all(name.casefold() in present for name in info.required_weight_files)
 
     def check_package_installed(self, pkg_name: str) -> bool:
         """Fast, read-only inspection whether a package is importable without loading whole module."""
@@ -655,7 +714,7 @@ class ModelManager:
 
         if not is_ready:
             pkgs_str = " ".join(missing_req)
-            safe_cmd = f'"{sys.executable}" -m pip install {pkgs_str} --no-warn-script-location'
+            safe_cmd = f'"{sys.executable}" -m iqa_gui.core.dependency_installer {pkgs_str}'
             warning = f"算法 [{info.display_name}] 缺少必要依赖包: {', '.join(missing_req)}"
         elif missing_opt:
             warning = f"算法 [{info.display_name}] 可选硬件加速组件未安装: {', '.join(missing_opt)} (不影响基础运行)"

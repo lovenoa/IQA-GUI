@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 from typing import Dict, List, Optional
 from PySide6.QtCore import Qt
@@ -36,7 +37,7 @@ class MultiImageCompareDialog(QDialog):
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
-        self.image_paths = [p for p in image_paths if p in eval_results_map]
+        self.image_paths = list(image_paths)
         self.eval_results_map = eval_results_map
 
         self.setWindowTitle("多图画质横向比对 PK 报表")
@@ -130,10 +131,8 @@ class MultiImageCompareDialog(QDialog):
         if not self.image_paths:
             return
 
-        # Collect ordered metrics from the first image
-        first_path = self.image_paths[0]
-        first_results = self.eval_results_map.get(first_path, [])
-        metric_names = [r.metric_name for r in first_results]
+        metric_names = list(dict.fromkeys(r.metric_name for path in self.image_paths
+                                         for r in self.eval_results_map.get(path, [])))
 
         self.table_compare.setRowCount(len(metric_names))
 
@@ -146,7 +145,7 @@ class MultiImageCompareDialog(QDialog):
             results_for_m: List[Optional[SingleEvalResult]] = []
             for p in self.image_paths:
                 m_list = self.eval_results_map.get(p, [])
-                match = next((r for r in m_list if r.metric_name == m_name), None)
+                match = next((r for r in m_list if r.metric_name == m_name and math.isfinite(r.score)), None)
                 results_for_m.append(match)
 
             first_valid = next((r for r in results_for_m if r is not None), None)
@@ -177,7 +176,7 @@ class MultiImageCompareDialog(QDialog):
             best_idx: Optional[int] = None
             worst_idx: Optional[int] = None
             is_tie = False
-            if valid_scores:
+            if len(valid_scores) >= 2:
                 if lower_better:
                     best_score = min(s for _, s in valid_scores)
                     worst_score = max(s for _, s in valid_scores)
@@ -203,7 +202,7 @@ class MultiImageCompareDialog(QDialog):
             for img_idx, r in enumerate(results_for_m):
                 col_idx = 3 + img_idx
                 if r is not None:
-                    txt = f"{r.formatted_score} ({r.grade}级)"
+                    txt = r.formatted_score if m_name.lower() == "clipscore" else f"{r.formatted_score} ({r.grade}级)"
                     item_score = QTableWidgetItem(txt)
                     item_score.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -244,7 +243,7 @@ class MultiImageCompareDialog(QDialog):
                 font.setBold(True)
                 item_win.setFont(font)
             else:
-                item_win = QTableWidgetItem("-")
+                item_win = QTableWidgetItem("有效数据不足")
             item_win.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_compare.setItem(row_idx, win_col_idx, item_win)
 

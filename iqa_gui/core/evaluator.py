@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import time
+import threading
+from contextlib import contextmanager
+from functools import wraps
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 import numpy as np
@@ -117,7 +120,7 @@ def compute_normalized_quality(
         "psnr": (15.0, 50.0),
         "lpips": (0.0, 0.8),
         "dists": (0.0, 0.8),
-        "clipscore": (10.0, 35.0),
+        "clipscore": (0.0, 2.5),
         "laion_aes": (1.0, 10.0),
         "musiq": (0.0, 100.0),
         "ssim": (0.0, 1.0),
@@ -196,14 +199,7 @@ def calculate_grade(
         else:
             tier, desc = "C", "可能存在伪影或失真"
     elif m == "clipscore":
-        if score >= 28.0:
-            tier, desc = "S", "图文契合度高"
-        elif score >= 22.0:
-            tier, desc = "A", "图文契合度良好"
-        elif score >= 16.0:
-            tier, desc = "B", "图文契合度一般"
-        else:
-            tier, desc = "C", "图文契合度较低"
+        tier, desc = "—", "图文匹配度：仅供同一提示词下比较，不参与画质评级"
     elif m == "psnr":
         tier = "S" if score >= 35.0 else ("A" if score >= 28.0 else ("B" if score >= 20.0 else "C"))
         desc = f"信噪比优 (>=35dB)" if tier == "S" else (f"信噪比良好 (>=28dB)" if tier == "A" else (f"信噪比一般 (>=20dB)" if tier == "B" else f"信噪比偏低 (<20dB)"))
@@ -275,21 +271,46 @@ class SingleEvalResult:
         return "▼ 越低越好" if self.lower_better else "▲ 越高越好"
 
 
+def _serialized(method):
+    """Use one reentrant lock for inference, loading, device changes and cleanup."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._model_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class EvaluatorEngine:
     """Evaluation engine managing cached metric instances and running inference."""
 
     def __init__(self, device: str = "cpu"):
         self.device = device
+        self._model_lock = threading.RLock()
         self.model_manager = ModelManager()
         self._loaded_models: Dict[str, Any] = {}
         patch_mplug_owl_compatibility()
 
+    @contextmanager
+    def task_guard(self, cancel_check=None):
+        """Serialize complete tasks, including cleanup; waiting tasks can cancel."""
+        while not self._model_lock.acquire(timeout=0.05):
+            if cancel_check and cancel_check():
+                raise InterruptedError("任务已取消。")
+        try:
+            if cancel_check and cancel_check():
+                raise InterruptedError("任务已取消。")
+            yield
+        finally:
+            self._model_lock.release()
+
+    @_serialized
     def set_device(self, device: str) -> None:
         """Switch active device and clear model cache if changed."""
         if device != self.device:
             self.device = device
             self.release_vram(force_unload=True)
 
+    @_serialized
     def get_or_create_metric(self, metric_name: str) -> Any:
         """Get preloaded metric or instantiate new one."""
         if pyiqa is None:
@@ -325,9 +346,10 @@ class EvaluatorEngine:
             "available": False,
         }
 
+    @_serialized
     def unload_metric(self, metric_name: str) -> bool:
         """Unload a specific metric model from memory and clear GPU cache."""
-        target_keys = [k for k in list(self._loaded_models.keys()) if k.lower().startswith(metric_name.lower())]
+        target_keys = [k for k in list(self._loaded_models.keys()) if k.lower() == f"{metric_name.lower()}_{self.device}"]
         if not target_keys:
             return False
         for k in target_keys:
@@ -335,6 +357,7 @@ class EvaluatorEngine:
         self.release_vram(force_unload=False)
         return True
 
+    @_serialized
     def release_vram(self, force_unload: bool = False, unload_heavy_only: bool = False) -> Dict[str, float]:
         """Free GPU memory cache and optionally unload models from memory.
 
@@ -360,6 +383,7 @@ class EvaluatorEngine:
                 pass
         return self.get_vram_usage()
 
+    @_serialized
     def evaluate_single(
         self,
         metric_name: str,
@@ -376,9 +400,14 @@ class EvaluatorEngine:
             raise ValueError(
                 f"算法 '{metric_name}' 属于生成模型集合分布度量算法 (FID / Inception Score)，"
                 f"需要对整个图片文件夹与基准数据集进行特征统计，不支持单张图片评估。\n"
-                f"如需使用，请前往【文件夹批量评测】或【基准性能评测】模块中使用。"
+                f"当前工作台尚未提供图片集分布评测入口，请使用支持整个数据集的专用工具。"
             )
 
+        info = self.model_manager.get_model(metric_name)
+        if metric_name.lower() == "clipscore" and not (prompt and str(prompt).strip()):
+            raise ValueError("评估 CLIPScore 需要提供文字描述 (提示词 Prompt)。")
+        if info and info.mode == "FR" and (not ref_path or not os.path.isfile(ref_path)):
+            raise ValueError(f"指标 '{metric_name}' 属于全参考 (FR) 算法，必须提供有效的参考原图。")
         metric = self.get_or_create_metric(metric_name)
         info = self.model_manager.get_model(metric_name)
         mode = metric.metric_mode if hasattr(metric, "metric_mode") else (info.mode if info else "NR")
@@ -407,6 +436,9 @@ class EvaluatorEngine:
             score = float(score_tensor)
         else:
             score = float(np.mean(score_tensor))
+
+        if not np.isfinite(score):
+            raise ValueError(f"指标 '{metric_name}' 返回无效数值，请检查图像及算法适用条件。")
 
         elapsed = time.perf_counter() - start_time
 

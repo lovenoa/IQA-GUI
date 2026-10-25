@@ -5,6 +5,7 @@ __pycache__/
 *.so
 
 # Environments & testing
+.venv/
 .pytest_cache/
 .coverage
 htmlcov/

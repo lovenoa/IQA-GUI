@@ -35,7 +35,7 @@ from iqa_gui.core.evaluator import (
     generate_difference_heatmap,
 )
 from iqa_gui.core.model_manager import ModelManager
-from iqa_gui.core.worker_threads import SingleEvalWorker
+from iqa_gui.core.worker_threads import SingleEvalWorker, launch_worker
 from iqa_gui.ui.components.compare_dialog import MultiImageCompareDialog
 from iqa_gui.ui.components.multi_round_dialog import MultiRoundSummaryDialog
 from iqa_gui.ui.components.image_viewer import ImageViewerCard
@@ -85,6 +85,8 @@ class SingleEvalView(QWidget):
         self.default_order_results: List[SingleEvalResult] = []
         self.latest_results: List[SingleEvalResult] = []
         self.sort_state: Optional[Tuple[int, bool]] = None  # (column_index, ascending)
+        self._heatmap_key = None
+        self._heatmap_pixmap = None
         self.base_headers = ["算法", "模式", "得分", "倾向", "评级", "指标综合诊断"]
 
         self._init_ui()
@@ -103,7 +105,9 @@ class SingleEvalView(QWidget):
         left_layout.setSpacing(6)
 
         # 1. Metric Selector (Multi-select enabled with presets and selected chips)
-        self.metric_selector = MetricSelectorWidget(multi_select=True, parent=self)
+        self.metric_selector = MetricSelectorWidget(
+            multi_select=True, parent=self,
+            allowed_metrics=self.model_manager.workflow_metrics("single", has_prompt=True))
         self.metric_selector.selection_changed.connect(self._on_metric_changed)
         left_layout.addWidget(self.metric_selector, 3)
 
@@ -115,7 +119,7 @@ class SingleEvalView(QWidget):
         prompt_layout.setSpacing(4)
         self.lbl_prompt = QLabel("<b>生图提示词 (Prompt - 供 CLIPScore 校验契合度):</b>")
         self.edit_prompt = QLineEdit()
-        self.edit_prompt.setPlaceholderText("例如: 1girl, masterpiece, anime aesthetic, highly detailed")
+        self.edit_prompt.setPlaceholderText("例如: a landscape with mountains and a river")
         prompt_layout.addWidget(self.lbl_prompt)
         prompt_layout.addWidget(self.edit_prompt)
         self.prompt_frame.hide()
@@ -128,6 +132,10 @@ class SingleEvalView(QWidget):
         self.btn_run.setMinimumHeight(32)
         self.btn_run.clicked.connect(self.run_evaluation)
         run_row.addWidget(self.btn_run, 1)
+        self.btn_cancel = QPushButton("停止")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel_evaluation)
+        run_row.addWidget(self.btn_cancel)
 
         self.chk_multi_round = QCheckBox("启用多轮")
         self.chk_multi_round.setToolTip("重复执行指定轮数，统计极差、标准差与均值")
@@ -512,7 +520,7 @@ class SingleEvalView(QWidget):
             # Col 4: Tier badge
             tier = res.grade
             insight = res.grade_desc
-            lbl_tier = QLabel(f" {tier}级 ")
+            lbl_tier = QLabel(f" {tier}级 " if tier != "—" else " 不适用 ")
             lbl_tier.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if tier == "S":
                 lbl_tier.setProperty("class", "TierS")
@@ -522,8 +530,10 @@ class SingleEvalView(QWidget):
                 a_count += 1
             elif tier == "B":
                 lbl_tier.setProperty("class", "TierB")
-            else:
+            elif tier == "C":
                 lbl_tier.setProperty("class", "TierC")
+            else:
+                lbl_tier.setProperty("class", "MutedText")
             self.table_scorecard.setCellWidget(row_idx, 4, lbl_tier)
 
             # Col 5: Insight
@@ -539,10 +549,7 @@ class SingleEvalView(QWidget):
 
         if total > 0:
             self.table_scorecard.selectRow(0)
-            overall_text = "综合评级：S 级 (细节与画质表现良好)" if s_count >= 2 else (
-                "综合评级：A 级 (水准良好，无明显瑕疵)" if (s_count + a_count) >= 2 else
-                "综合评级：B 级 (整体合格，建议关注局部微小噪点或模糊)"
-            )
+            overall_text = f"已完成 {total} 项指标。各算法分别解释；经验评级不作为统一画质或合格结论。"
             first_res = self.latest_results[0]
             info = self.model_manager.get_model(first_res.metric_name)
             desc = info.description_zh if info else ""
@@ -550,19 +557,23 @@ class SingleEvalView(QWidget):
 
         if fr_result_for_heatmap and fr_result_for_heatmap.ref_path:
             try:
-                diff_pil = generate_difference_heatmap(
-                    fr_result_for_heatmap.target_path,
-                    fr_result_for_heatmap.ref_path,
-                )
-                data = diff_pil.tobytes("raw", "RGB")
-                qimg = QImage(data, diff_pil.width, diff_pil.height, diff_pil.width * 3, QImage.Format.Format_RGB888)
-                pixmap = QPixmap.fromImage(qimg)
-                self.viewer_diff.display_pixmap(pixmap)
+                paths = (fr_result_for_heatmap.target_path, fr_result_for_heatmap.ref_path)
+                key = tuple((p, os.stat(p).st_mtime_ns, os.stat(p).st_size) for p in paths)
+                if key != self._heatmap_key:
+                    diff_pil = generate_difference_heatmap(*paths)
+                    data = diff_pil.tobytes("raw", "RGB")
+                    qimg = QImage(data, diff_pil.width, diff_pil.height, diff_pil.width * 3, QImage.Format.Format_RGB888)
+                    self._heatmap_pixmap = QPixmap.fromImage(qimg)
+                    self._heatmap_key = key
+                    self.viewer_diff.display_pixmap(self._heatmap_pixmap)
             except Exception as e:
                 print(f"Error rendering difference heatmap: {e}")
 
     def run_evaluation(self) -> None:
         """Trigger multi-metric evaluation across all loaded target images."""
+        if getattr(self.window(), "_active_tasks", None):
+            self.lbl_eval_status.setText("请等待当前任务及清理结束。")
+            return
         selected = self.metric_selector.get_selected()
         if not selected:
             QMessageBox.warning(self, "请选择算法", "请先在左侧选择至少一种图像质量评估算法。")
@@ -607,6 +618,7 @@ class SingleEvalView(QWidget):
         # Prepare UI
         rounds = self.spin_rounds.value() if self.chk_multi_round.isChecked() else 1
         self.btn_run.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
         self.btn_run.setText("正在计算...")
         total_evals = rounds * len(target_paths) * len(selected)
         round_hint = f"共 {rounds} 轮, " if rounds > 1 else ""
@@ -615,7 +627,7 @@ class SingleEvalView(QWidget):
         self.table_scorecard.setRowCount(0)
 
         settings = load_settings()
-        auto_release = settings.get("auto_release_vram", True)
+        auto_release = getattr(self.window(), "auto_release_vram", settings.get("auto_release_vram", True))
 
         # Start worker thread
         self.active_worker = SingleEvalWorker(
@@ -630,9 +642,23 @@ class SingleEvalView(QWidget):
         self.active_worker.progress.connect(self._on_worker_progress)
         self.active_worker.rounds_finished.connect(self._on_rounds_eval_finished)
         self.active_worker.multi_finished.connect(self._on_multi_eval_finished)
-        self.active_worker.finished.connect(self._on_eval_finished)
+        self.active_worker.result_ready.connect(self._on_eval_finished)
+        self.active_worker.finished.connect(self._on_thread_finished)
+        self.active_worker.cancelled.connect(lambda: self.lbl_eval_status.setText("评估已停止，未将部分结果标为完成。"))
         self.active_worker.error.connect(self._on_eval_error)
-        self.active_worker.start()
+        if not launch_worker(self.active_worker, self):
+            self.active_worker = None
+            self._on_thread_finished()
+
+    def cancel_evaluation(self):
+        if self.active_worker and self.active_worker.isRunning():
+            self.lbl_eval_status.setText("正在停止，等待当前计算安全结束...")
+            self.active_worker.cancel()
+
+    def _on_thread_finished(self):
+        self.btn_run.setEnabled(True)
+        self.btn_run.setText("开始评估")
+        self.btn_cancel.setEnabled(False)
 
     def _on_worker_progress(self, current: int, total: int, metric_name: str) -> None:
         self.lbl_eval_status.setText(f"正在计算 ({current}/{total}): {metric_name} ...")
@@ -640,6 +666,7 @@ class SingleEvalView(QWidget):
     def _on_rounds_eval_finished(self, multi_round_map: Dict[int, Dict[str, List[SingleEvalResult]]]) -> None:
         """Handle completion of multi-round evaluation."""
         self.rounds_eval_map = multi_round_map
+        self.current_round = 1
         total_rounds = len(multi_round_map)
 
         if total_rounds > 1:
@@ -658,7 +685,7 @@ class SingleEvalView(QWidget):
 
     def _on_multi_eval_finished(self, eval_map: Dict[str, List[SingleEvalResult]]) -> None:
         """Handle evaluation completion for all targets."""
-        self.eval_results_map.update(eval_map)
+        self.eval_results_map = dict(eval_map)
         evaluated_count = len(self.eval_results_map)
         if evaluated_count >= 2:
             self.btn_open_compare.show()
@@ -670,9 +697,6 @@ class SingleEvalView(QWidget):
 
     def _on_eval_finished(self, results: List[SingleEvalResult]) -> None:
         """Handle evaluation completion."""
-        self.btn_run.setEnabled(True)
-        self.btn_run.setText("开始评估")
-
         cur_target = self.viewer_target.current_file_path
         current_map = self.rounds_eval_map.get(self.current_round, self.eval_results_map)
 
@@ -705,9 +729,10 @@ class SingleEvalView(QWidget):
             info = self.model_manager.get_model(res.metric_name)
             desc = info.description_zh if info else ""
             self.lbl_explanation.setText(
-                f"【{res.metric_name} 结果: {res.formatted_score} ({res.direction_hint}) | {res.grade}级】\n"
+                f"【{res.metric_name} 结果: {res.formatted_score} ({res.direction_hint})" +
+                (f" | {res.grade}级经验提示】\n" if res.grade != "—" else "】\n") +
                 f"{res.grade_desc}\n\n"
-                f"【标准化质量】{res.normalized_quality * 100:.1f} / 100\n\n"
+                f"【标准化{'相似度' if res.metric_name == 'clipscore' else '参考指数'}】{res.normalized_quality * 100:.1f} / 100\n\n"
                 f"【算法原理】{desc}"
             )
 
@@ -717,8 +742,6 @@ class SingleEvalView(QWidget):
         self.metric_selector.set_tips_visible(visible)
 
     def _on_eval_error(self, err_msg: str) -> None:
-        self.btn_run.setEnabled(True)
-        self.btn_run.setText("开始评估")
         self.lbl_eval_status.setText("评估出错")
         self.lbl_explanation.setText(f"评估出错: {err_msg}")
 
@@ -727,6 +750,8 @@ class SingleEvalView(QWidget):
         if hasattr(main_win, "update_vram_display"):
             main_win.update_vram_display()
 
+        if getattr(self.window(), "_closing", False):
+            return
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Icon.Critical)
         msg_box.setWindowTitle("评估失败")

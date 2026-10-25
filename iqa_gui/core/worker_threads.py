@@ -1,394 +1,256 @@
-"""PySide6 QThread worker threads for non-blocking asynchronous computations."""
-
+"""Qt workers separating business results from native thread completion."""
 from __future__ import annotations
-
-import subprocess
-import sys
-import time
-from typing import Any, Callable, Dict, List, Optional, Union
+from contextlib import nullcontext
+from typing import List, Optional, Union
 from PySide6.QtCore import QObject, QThread, Signal
-
-from iqa_gui.core.evaluator import EvaluatorEngine, SingleEvalResult
-from iqa_gui.core.batch_evaluator import BatchEvaluator, BatchItem, BatchSummary
-from iqa_gui.core.gmad_engine import GMADEngine, GMADResult
-from iqa_gui.core.benchmark_engine import BenchmarkEngine, BenchmarkResult
+from iqa_gui.core.evaluator import EvaluatorEngine
+from iqa_gui.core.batch_evaluator import BatchEvaluator, BatchItem
+from iqa_gui.core.gmad_engine import GMADEngine
+from iqa_gui.core.benchmark_engine import BenchmarkEngine
 from iqa_gui.core.log_manager import LogManager
 
 
-class SingleEvalWorker(QThread):
-    """Background worker for evaluating single image, image pair, or multiple targets across one or multiple rounds."""
-    progress = Signal(int, int, str)   # Emits (current_index, total_count, metric_name)
-    finished = Signal(object)          # Emits List[SingleEvalResult] for active/first target (Round 1)
-    multi_finished = Signal(object)    # Emits Dict[str, List[SingleEvalResult]] for Round 1
-    rounds_finished = Signal(object)   # Emits Dict[int, Dict[str, List[SingleEvalResult]]] for all rounds
-    error = Signal(str)                # Emits error message
+def launch_worker(worker, owner) -> bool:
+    window = owner.window()
+    if hasattr(window, "begin_task"):
+        return window.begin_task(worker, owner)
+    if worker.isRunning():
+        return False
+    if worker.parent() is None:
+        worker.setParent(owner)
+    worker.start()
+    return True
 
-    def __init__(
-        self,
-        evaluator: EvaluatorEngine,
-        metrics: Union[str, List[str]],
-        target_path: Union[str, List[str]],
-        ref_path: Optional[str] = None,
-        prompt: Optional[str] = None,
-        rounds: int = 1,
-        auto_release_vram: bool = True,
-        parent: Optional[QObject] = None,
-    ):
+
+class EvaluationWorker(QThread):
+    """Hold the engine guard through cleanup. finished remains QThread.finished()."""
+    error = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, evaluator, auto_release_vram=True, parent=None):
         super().__init__(parent)
         self.evaluator = evaluator
-        if isinstance(metrics, str):
-            self.metric_names = [metrics]
-        else:
-            self.metric_names = list(metrics)
-
-        if isinstance(target_path, list):
-            self.target_paths = list(target_path)
-            self.target_path = self.target_paths[0] if self.target_paths else ""
-        else:
-            self.target_paths = [target_path]
-            self.target_path = target_path
-
-        self.ref_path = ref_path
-        self.prompt = prompt
-        self.rounds = max(1, int(rounds))
         self.auto_release_vram = auto_release_vram
         self._is_cancelled = False
 
-    def cancel(self) -> None:
+    def cancel(self):
         self._is_cancelled = True
+        self._cancel_engine()
 
-    def run(self) -> None:
-        heavy_metrics = {
-            "qalign", "qalign_8bit", "qalign_4bit", "mplug_owl",
-            "qrealign", "qrealign-mini", "qrealign-lite", "qrealign-pro",
-        }
-        error_occurred = False
+    def _cancel_engine(self):
+        pass
+
+    def run(self):
+        value, failure = None, None
+        guard = (self.evaluator.task_guard(lambda: self._is_cancelled)
+                 if hasattr(self.evaluator, "task_guard") else nullcontext())
         try:
-            multi_round_map: Dict[int, Dict[str, List[SingleEvalResult]]] = {}
-            total_steps = self.rounds * len(self.target_paths) * len(self.metric_names)
-            step_counter = 0
-
-            for r_idx in range(1, self.rounds + 1):
-                if self._is_cancelled:
-                    break
-                eval_map_this_round: Dict[str, List[SingleEvalResult]] = {}
-
-                for img_idx, cur_target in enumerate(self.target_paths):
+            with guard:
+                try:
                     if self._is_cancelled:
-                        break
-                    results_this_img: List[SingleEvalResult] = []
-
-                    for m_name in self.metric_names:
-                        if self._is_cancelled:
-                            break
-                        step_counter += 1
-                        round_prefix = f"[轮次 {r_idx}/{self.rounds}] " if self.rounds > 1 else ""
-                        target_prefix = f"[图 {img_idx+1}/{len(self.target_paths)}] " if len(self.target_paths) > 1 else ""
-                        status_hint = f"{round_prefix}{target_prefix}{m_name}"
-                        self.progress.emit(step_counter, total_steps, status_hint)
-
-                        # Determine if reference image is needed for this specific metric
-                        model_info = self.evaluator.model_manager.get_model(m_name)
-                        need_ref = (model_info.mode == "FR") if model_info else False
-                        ref = self.ref_path if need_ref else None
-
-                        res = self.evaluator.evaluate_single(
-                            metric_name=m_name,
-                            target_path=cur_target,
-                            ref_path=ref,
-                            prompt=self.prompt,
-                        )
-                        results_this_img.append(res)
-
-                        # --- STEP-BY-STEP VRAM RELEASE (每一步完成即时释放显存) ---
-                        if self.auto_release_vram:
-                            self.evaluator.unload_metric(m_name)
-                            self.evaluator.release_vram(force_unload=False)
-                        elif m_name.lower() in heavy_metrics:
-                            self.evaluator.unload_metric(m_name)
-                            self.evaluator.release_vram(force_unload=False)
-                        else:
-                            self.evaluator.release_vram(force_unload=False)
-
-                    eval_map_this_round[cur_target] = results_this_img
-                multi_round_map[r_idx] = eval_map_this_round
-
-            if not self._is_cancelled:
-                self.rounds_finished.emit(multi_round_map)
-                round_1 = multi_round_map.get(1, {})
-                self.multi_finished.emit(round_1)
-                primary_results = round_1.get(self.target_path, [])
-                self.finished.emit(primary_results)
-        except Exception as e:
-            error_occurred = True
-            self.error.emit(str(e))
-        finally:
-            if error_occurred or self.auto_release_vram:
-                self.evaluator.release_vram(force_unload=True)
-            else:
-                self.evaluator.release_vram(force_unload=False, unload_heavy_only=True)
+                        raise InterruptedError("任务已取消。")
+                    value = self._execute()
+                except Exception as exc:
+                    failure = exc
+                finally:
+                    try:
+                        self.evaluator.release_vram(force_unload=bool(failure) or self.auto_release_vram)
+                    except Exception as exc:
+                        failure = failure or exc
+        except Exception as exc:
+            failure = exc
+        if self._is_cancelled or isinstance(failure, InterruptedError):
+            self.cancelled.emit()
+        elif failure is not None:
+            self.error.emit(str(failure))
+        else:
+            self._publish_result(value)
 
 
-class BatchEvalWorker(QThread):
-    """Background worker for running multi-metric batch evaluations."""
-    progress = Signal(int, int, object, float)  # current, total, BatchItem, speed
-    item_finished = Signal(object)             # BatchItem
-    finished = Signal(object)                  # BatchSummary
-    error = Signal(str)
+class SingleEvalWorker(EvaluationWorker):
+    progress = Signal(int, int, str)
+    result_ready = Signal(object)
+    multi_finished = Signal(object)
+    rounds_finished = Signal(object)
 
-    def __init__(
-        self,
-        batch_evaluator: BatchEvaluator,
-        items: List[BatchItem],
-        metrics: List[str],
-        auto_release_vram: bool = True,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self.batch_evaluator = batch_evaluator
-        self.items = items
-        self.metrics = metrics
-        self.auto_release_vram = auto_release_vram
+    def __init__(self, evaluator: EvaluatorEngine, metrics: Union[str, List[str]],
+                 target_path: Union[str, List[str]], ref_path: Optional[str] = None,
+                 prompt: Optional[str] = None, rounds: int = 1,
+                 auto_release_vram: bool = True, parent: Optional[QObject] = None):
+        super().__init__(evaluator, auto_release_vram, parent)
+        self.metric_names = [metrics] if isinstance(metrics, str) else list(metrics)
+        self.target_paths = list(target_path) if isinstance(target_path, list) else [target_path]
+        self.target_path = self.target_paths[0] if self.target_paths else ""
+        self.ref_path, self.prompt = ref_path, prompt
+        self.rounds = max(1, int(rounds))
 
-    def cancel(self) -> None:
+    def _execute(self):
+        multi_round_map = {}
+        total = self.rounds * len(self.target_paths) * len(self.metric_names)
+        step = 0
+        for r_idx in range(1, self.rounds + 1):
+            round_map = {}
+            for img_idx, target in enumerate(self.target_paths):
+                results = []
+                for name in self.metric_names:
+                    if self._is_cancelled:
+                        raise InterruptedError("评估已取消。")
+                    step += 1
+                    self.progress.emit(step, total, f"[轮次 {r_idx}/{self.rounds}] [图 {img_idx+1}/{len(self.target_paths)}] {name}")
+                    info = self.evaluator.model_manager.get_model(name)
+                    ref = self.ref_path if info and info.mode == "FR" else None
+                    results.append(self.evaluator.evaluate_single(
+                        metric_name=name, target_path=target, ref_path=ref, prompt=self.prompt))
+                    if self.auto_release_vram:
+                        self.evaluator.unload_metric(name)
+                round_map[target] = results
+            multi_round_map[r_idx] = round_map
+        return multi_round_map
+
+    def _publish_result(self, value):
+        self.rounds_finished.emit(value)
+        first = value.get(1, {})
+        self.multi_finished.emit(first)
+        self.result_ready.emit(first.get(self.target_path, []))
+
+
+class BatchEvalWorker(EvaluationWorker):
+    progress = Signal(int, int, object, float)
+    item_finished = Signal(object)
+    result_ready = Signal(object)
+
+    def __init__(self, batch_evaluator: BatchEvaluator, items: List[BatchItem],
+                 metrics: List[str], auto_release_vram: bool = True, parent=None):
+        super().__init__(batch_evaluator.engine, auto_release_vram, parent)
+        self.batch_evaluator, self.items, self.metrics = batch_evaluator, items, metrics
+
+    def _cancel_engine(self):
         self.batch_evaluator.cancel()
 
-    def run(self) -> None:
-        error_occurred = False
-        try:
-            summary = self.batch_evaluator.run_batch(
-                items=self.items,
-                metrics=self.metrics,
-                on_progress=lambda cur, tot, item, speed: self.progress.emit(cur, tot, item, speed),
-                on_item_finished=lambda item: self.item_finished.emit(item),
-            )
-            self.finished.emit(summary)
-        except Exception as e:
-            error_occurred = True
-            self.error.emit(str(e))
-        finally:
-            if error_occurred or self.auto_release_vram:
-                self.batch_evaluator.engine.release_vram(force_unload=True)
-            else:
-                self.batch_evaluator.engine.release_vram(force_unload=False)
+    def _execute(self):
+        return self.batch_evaluator.run_batch(
+            items=self.items, metrics=self.metrics,
+            on_progress=lambda cur, total, item, speed: self.progress.emit(cur, total, item, speed),
+            on_item_finished=self.item_finished.emit, cancel_check=lambda: self._is_cancelled)
+
+    def _publish_result(self, value):
+        self.result_ready.emit(value)
 
 
-class GMADWorker(QThread):
-    """Background worker for gMAD candidate-pool competition."""
-    progress = Signal(str, int, int)           # message, current, total
-    finished = Signal(object)                  # GMADResult
-    error = Signal(str)
+class GMADWorker(EvaluationWorker):
+    progress = Signal(str, int, int)
+    result_ready = Signal(object)
 
-    def __init__(
-        self,
-        gmad_engine: GMADEngine,
-        image_paths: List[str],
-        metric_a: str,
-        metric_b: str,
-        tolerance: float = 0.1,
-        auto_release_vram: bool = True,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self.gmad_engine = gmad_engine
-        self.image_paths = image_paths
-        self.metric_a = metric_a
-        self.metric_b = metric_b
-        self.tolerance = tolerance
-        self.auto_release_vram = auto_release_vram
+    def __init__(self, gmad_engine: GMADEngine, image_paths: List[str],
+                 metric_a: str, metric_b: str, tolerance: float = .1,
+                 auto_release_vram: bool = True, parent=None):
+        super().__init__(gmad_engine.evaluator, auto_release_vram, parent)
+        self.gmad_engine, self.image_paths = gmad_engine, image_paths
+        self.metric_a, self.metric_b, self.tolerance = metric_a, metric_b, tolerance
 
-    def cancel(self) -> None:
+    def _cancel_engine(self):
         self.gmad_engine.cancel()
 
-    def run(self) -> None:
-        error_occurred = False
-        try:
-            result = self.gmad_engine.run_gmad(
-                image_paths=self.image_paths,
-                metric_a=self.metric_a,
-                metric_b=self.metric_b,
-                tolerance=self.tolerance,
-                on_progress=lambda msg, cur, tot: self.progress.emit(msg, cur, tot),
-            )
-            self.finished.emit(result)
-        except Exception as e:
-            error_occurred = True
-            self.error.emit(str(e))
-        finally:
-            if error_occurred or self.auto_release_vram:
-                self.gmad_engine.evaluator.release_vram(force_unload=True)
-            else:
-                self.gmad_engine.evaluator.release_vram(force_unload=False)
+    def _execute(self):
+        return self.gmad_engine.run_gmad(
+            image_paths=self.image_paths, metric_a=self.metric_a, metric_b=self.metric_b,
+            tolerance=self.tolerance,
+            on_progress=lambda msg, cur, total: self.progress.emit(msg, cur, total),
+            cancel_check=lambda: self._is_cancelled)
+
+    def _publish_result(self, value):
+        self.result_ready.emit(value)
 
 
-class BenchmarkWorker(QThread):
-    """Background worker for dataset benchmark evaluation."""
-    progress = Signal(str, int, int)           # message, current, total
-    finished = Signal(object)                  # BenchmarkResult
-    error = Signal(str)
+class BenchmarkWorker(EvaluationWorker):
+    progress = Signal(str, int, int)
+    result_ready = Signal(object)
 
-    def __init__(
-        self,
-        benchmark_engine: BenchmarkEngine,
-        dataset_name: str,
-        image_root: str,
-        csv_path: str,
-        metrics: List[str],
-        auto_release_vram: bool = True,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self.benchmark_engine = benchmark_engine
-        self.dataset_name = dataset_name
-        self.image_root = image_root
-        self.csv_path = csv_path
-        self.metrics = metrics
-        self.auto_release_vram = auto_release_vram
+    def __init__(self, benchmark_engine: BenchmarkEngine, dataset_name: str,
+                 image_root: str, csv_path: str, metrics: List[str],
+                 auto_release_vram: bool = True, parent=None, *,
+                 image_col="image", score_col="mos", ref_col=None,
+                 ref_root=None, label_lower_better=False):
+        super().__init__(benchmark_engine.evaluator, auto_release_vram, parent)
+        self.benchmark_engine, self.dataset_name = benchmark_engine, dataset_name
+        self.image_root, self.csv_path, self.metrics = image_root, csv_path, metrics
+        self.image_col, self.score_col, self.ref_col = image_col, score_col, ref_col
+        self.ref_root, self.label_lower_better = ref_root, label_lower_better
 
-    def cancel(self) -> None:
+    def _cancel_engine(self):
         self.benchmark_engine.cancel()
 
-    def run(self) -> None:
-        error_occurred = False
-        try:
-            result = self.benchmark_engine.run_benchmark_from_csv(
-                dataset_name=self.dataset_name,
-                image_root=self.image_root,
-                csv_path=self.csv_path,
-                metrics=self.metrics,
-                on_progress=lambda msg, cur, tot: self.progress.emit(msg, cur, tot),
-            )
-            self.finished.emit(result)
-        except Exception as e:
-            error_occurred = True
-            self.error.emit(str(e))
-        finally:
-            if error_occurred or self.auto_release_vram:
-                self.benchmark_engine.evaluator.release_vram(force_unload=True)
-            else:
-                self.benchmark_engine.evaluator.release_vram(force_unload=False)
+    def _execute(self):
+        return self.benchmark_engine.run_benchmark_from_csv(
+            dataset_name=self.dataset_name, image_root=self.image_root,
+            csv_path=self.csv_path, metrics=self.metrics, image_col=self.image_col,
+            score_col=self.score_col, ref_col=self.ref_col, ref_root=self.ref_root,
+            label_lower_better=self.label_lower_better,
+            on_progress=lambda msg, cur, total: self.progress.emit(msg, cur, total),
+            cancel_check=lambda: self._is_cancelled)
+
+    def _publish_result(self, value):
+        self.result_ready.emit(value)
 
 
-class PreloadWeightsWorker(QThread):
-    """Background worker to download/preload model weights."""
-    progress = Signal(str, int, int)           # current model, index, total
-    finished = Signal(list, list)              # succeeded_list, failed_list
+class PreloadWeightsWorker(EvaluationWorker):
+    progress = Signal(str, int, int)
+    result_ready = Signal(list, list)
 
-    def __init__(
-        self,
-        evaluator: EvaluatorEngine,
-        metrics: List[str],
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self.evaluator = evaluator
-        self.metrics = metrics
-        self._is_cancelled = False
+    def __init__(self, evaluator, metrics, parent=None):
+        super().__init__(evaluator, False, parent)
+        self.metrics = list(metrics)
 
-    def cancel(self) -> None:
-        self._is_cancelled = True
-
-    def run(self) -> None:
-        succeeded = []
-        failed = []
-        total = len(self.metrics)
-        for idx, m in enumerate(self.metrics):
+    def _execute(self):
+        succeeded, failed = [], []
+        for idx, name in enumerate(self.metrics):
             if self._is_cancelled:
-                break
-            self.progress.emit(f"正在下载/载入模型: {m}", idx + 1, total)
+                raise InterruptedError("预载已取消。")
+            self.progress.emit(f"正在下载/载入模型: {name}", idx + 1, len(self.metrics))
             try:
-                self.evaluator.get_or_create_metric(m)
-                succeeded.append(m)
-            except Exception as e:
-                failed.append((m, str(e)))
-        self.finished.emit(succeeded, failed)
+                self.evaluator.get_or_create_metric(name)
+                succeeded.append(name)
+            except Exception as exc:
+                failed.append((name, str(exc)))
+        return succeeded, failed
+
+    def _publish_result(self, value):
+        self.result_ready.emit(*value)
 
 
 class SafePackageInstallerWorker(QThread):
-    """Safely install missing packages in background, preserving PyTorch and CUDA drivers."""
-    progress = Signal(str)          # Current progress/stdout line
-    finished = Signal(bool, str)    # (success: bool, summary_message: str)
+    """Constrain installed versions; do not kill pip while it is writing."""
+    progress = Signal(str)
+    result_ready = Signal(bool, str)
 
-    def __init__(self, packages: List[str], parent: Optional[QObject] = None):
+    def __init__(self, packages, parent=None):
         super().__init__(parent)
         self.packages = list(packages)
-        self._is_cancelled = False
-        self._process: Optional[subprocess.Popen] = None
+        self._is_cancelled = self._install_started = False
 
-    def cancel(self) -> None:
-        self._is_cancelled = True
-        if self._process and self._process.poll() is None:
-            try:
-                self._process.terminate()
-            except Exception:
-                pass
+    def cancel(self):
+        if self._install_started:
+            self.progress.emit("组件安装正在写入，请等待完成后安全退出。")
+        else:
+            self._is_cancelled = True
 
-    def run(self) -> None:
-        if not self.packages:
-            self.finished.emit(True, "无需安装任何组件。")
+    def run(self):
+        from iqa_gui.core.dependency_installer import install_packages
+        if self._is_cancelled:
+            self.result_ready.emit(False, "组件安装已取消。")
             return
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            *self.packages,
-            "--no-warn-script-location",
-        ]
-
-        logger = LogManager.get_instance()
-        logger._append_to_buffer(f"\n[组件安装] 执行安装: {' '.join(cmd)}\n")
-        logger._append_to_buffer("[组件安装] 保留现有 PyTorch 与 CUDA 运行环境...\n")
-        self.progress.emit(f"开始安装组件: {', '.join(self.packages)}")
-
+        def progress(text):
+            self.progress.emit(text)
+            LogManager.get_instance()._append_to_buffer(f"[组件安装] {text}\n")
         try:
-            # Check cuda availability before
-            try:
-                import torch
-                cuda_before = torch.cuda.is_available()
-            except Exception:
-                cuda_before = False
-
-            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=creation_flags,
-            )
-
-            if self._process.stdout:
-                for line in self._process.stdout:
-                    if self._is_cancelled:
-                        break
-                    stripped = line.strip()
-                    if stripped:
-                        self.progress.emit(stripped)
-                        logger._append_to_buffer(f"[pip] {stripped}\n")
-
-            self._process.wait()
-
-            if self._is_cancelled:
-                self.finished.emit(False, "安装已被用户取消。")
-                return
-
-            if self._process.returncode == 0:
-                # Re-verify torch cuda
-                try:
-                    import torch
-                    cuda_after = torch.cuda.is_available()
-                    if cuda_before and not cuda_after:
-                        logger._append_to_buffer("[警告] 检测到 CUDA 环境状态变动，请在后台控制台中复查。\n")
-                except Exception:
-                    pass
-
-                self.finished.emit(True, f"组件 {', '.join(self.packages)} 安装成功。")
+            self._install_started = True
+            code = install_packages(self.packages, on_progress=progress)
+            if code == 0:
+                self.result_ready.emit(True, "组件安装完成。请重新启动工作台，在新进程中加载并检查组件。")
             else:
-                self.finished.emit(False, f"组件安装失败，返回码: {self._process.returncode}。请查看后台日志获取详细信息。")
-        except Exception as e:
-            self.finished.emit(False, f"启动安装进程异常: {str(e)}")
+                self.result_ready.emit(False, "安装未完成，已有环境版本受约束。请查看日志中的冲突或网络错误。")
+        except Exception as exc:
+            self.result_ready.emit(False, f"组件安装未完成: {exc}")
+        finally:
+            self._install_started = False
 

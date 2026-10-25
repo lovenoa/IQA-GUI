@@ -77,15 +77,16 @@ def test_model_manager_filter():
     assert any("psnr" in m.name for m in search_res)
 
 
-def test_cache_status():
-    mgr = ModelManager()
+def test_cache_status(tmp_path, monkeypatch):
+    mgr = ModelManager(str(tmp_path))
+    monkeypatch.setattr(mgr, "get_all_cache_roots", lambda: [tmp_path])
+    (tmp_path / "brisque_svm_weights.pth").write_bytes(b"local fixture")
     cached = mgr.get_cached_weights()
-    # At least brisque was downloaded earlier
     assert "brisque_svm_weights.pth" in cached
     assert mgr.is_cached("brisque") is True
 
     # Exact file verified
-    assert mgr.is_cached("laion_aes") is True
+    assert mgr.is_cached("laion_aes") is None  # CLIP and head completeness is not inferred
     assert mgr.is_cached("psnr") is True  # zero weights needed
 
     # Indeterminate models without deterministic single weight file return None (rendered as '-')
@@ -94,8 +95,9 @@ def test_cache_status():
     assert mgr.is_cached("clipscore") is None
 
 
-def test_dependency_detection():
+def test_dependency_detection(monkeypatch):
     mgr = ModelManager()
+    monkeypatch.setattr(mgr, "check_package_installed", lambda pkg: pkg not in {"causal_conv1d", "fla"})
 
     # Classical mathematical algorithm (zero external dependencies)
     psnr_dep = mgr.check_dependencies("psnr")
@@ -110,7 +112,7 @@ def test_dependency_detection():
     # VLM with optional acceleration
     qalign_dep = mgr.check_dependencies("qalign")
     assert qalign_dep.is_ready is True
-    assert "causal_conv1d" in qalign_dep.missing_optional or len(qalign_dep.missing_optional) >= 0
+    assert "causal_conv1d" in qalign_dep.missing_optional
 
 
 def test_missing_dependency_simulation():
@@ -125,11 +127,10 @@ def test_missing_dependency_simulation():
         dep_status = mgr.check_dependencies("musiq")
         assert dep_status.is_ready is False
         assert "timm" in dep_status.missing_required
-        assert "pip install" in dep_status.safe_install_command
-        # Verify safety guard: strictly no --upgrade to protect PyTorch CUDA drivers
+        assert "-m iqa_gui.core.dependency_installer timm" in dep_status.safe_install_command
+        # The protected entrypoint generates the installed-version constraints.
         assert "--upgrade" not in dep_status.safe_install_command
         assert "-U " not in dep_status.safe_install_command
-        assert "--no-warn-script-location" in dep_status.safe_install_command
     finally:
         mgr.check_package_installed = original_check
         mgr.clear_dependency_cache()

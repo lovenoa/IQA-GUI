@@ -40,6 +40,7 @@ class MultiRoundSummaryDialog(QDialog):
         super().__init__(parent)
         self.image_paths = list(image_paths)
         self.rounds_eval_map = rounds_eval_map
+        self.round_numbers = sorted(rounds_eval_map)
         self.total_rounds = len(rounds_eval_map)
 
         self.setWindowTitle("多轮测试统计聚合报表")
@@ -134,15 +135,18 @@ class MultiRoundSummaryDialog(QDialog):
     def _on_tab_changed(self, index: int) -> None:
         self.active_table = self.table_multi_summary if index == 0 else self.table_multi_details
 
+    def _metric_names(self) -> List[str]:
+        return list(dict.fromkeys(result.metric_name for round_num in self.round_numbers
+                                 for path in self.image_paths
+                                 for result in self.rounds_eval_map[round_num].get(path, [])))
+
     def _setup_single_image_table(self) -> None:
         """Populate table for single image evaluated across multiple rounds."""
         target_path = self.image_paths[0] if self.image_paths else ""
-        first_round = self.rounds_eval_map.get(1, {})
-        first_results = first_round.get(target_path, [])
-        metric_names = [r.metric_name for r in first_results]
+        metric_names = self._metric_names()
 
         cols = ["算法名称", "模式", "倾向"]
-        for r_num in range(1, self.total_rounds + 1):
+        for r_num in self.round_numbers:
             cols.append(f"第 {r_num} 轮得分")
         cols.extend(["均值 (Mean μ)", "变动极差 (Range)", "标准差 (Std σ)", "稳定性诊断"])
 
@@ -155,10 +159,12 @@ class MultiRoundSummaryDialog(QDialog):
         for row_idx, m_name in enumerate(metric_names):
             # Gather scores across rounds
             scores: List[float] = []
+            round_scores: List[Optional[float]] = []
             sample_res: Optional[SingleEvalResult] = None
-            for r_num in range(1, self.total_rounds + 1):
+            for r_num in self.round_numbers:
                 m_list = self.rounds_eval_map.get(r_num, {}).get(target_path, [])
-                match = next((r for r in m_list if r.metric_name == m_name), None)
+                match = next((r for r in m_list if r.metric_name == m_name and np.isfinite(r.score)), None)
+                round_scores.append(match.score if match is not None else None)
                 if match:
                     scores.append(match.score)
                     if not sample_res:
@@ -176,9 +182,9 @@ class MultiRoundSummaryDialog(QDialog):
             self.table_single.setItem(row_idx, 2, QTableWidgetItem(dir_str))
 
             # Rounds scores
-            for i, sc in enumerate(scores):
+            for i, sc in enumerate(round_scores):
                 col_i = 3 + i
-                item_sc = QTableWidgetItem(f"{sc:.4f}")
+                item_sc = QTableWidgetItem(f"{sc:.4f}" if sc is not None else "N/A")
                 item_sc.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table_single.setItem(row_idx, col_i, item_sc)
 
@@ -187,7 +193,7 @@ class MultiRoundSummaryDialog(QDialog):
             range_val = float(np.max(scores) - np.min(scores)) if scores else 0.0
             std_val = float(np.std(scores, ddof=1)) if len(scores) > 1 else 0.0
 
-            col_mean = 3 + len(scores)
+            col_mean = 3 + self.total_rounds
             col_rng = col_mean + 1
             col_std = col_mean + 2
             col_diag = col_mean + 3
@@ -201,13 +207,16 @@ class MultiRoundSummaryDialog(QDialog):
             item_rng.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_single.setItem(row_idx, col_rng, item_rng)
 
-            item_std = QTableWidgetItem(f"{std_val:.4f}")
+            item_std = QTableWidgetItem(f"{std_val:.4f}" if len(scores) > 1 else "N/A")
             item_std.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_single.setItem(row_idx, col_std, item_std)
 
             # Diagnosis text
-            if range_val < 1e-5:
-                diag = "绝对确定性 (完全一致，无波动)"
+            if len(scores) < 2:
+                diag = "有效轮次不足，无法判断稳定性"
+                color = QColor(128, 128, 128)
+            elif range_val < 1e-5:
+                diag = "本次重复结果一致 (未观察到波动)"
                 color = QColor(16, 185, 129)
             elif range_val < 0.02:
                 diag = f"微幅数值扰动 (极差={range_val:.4f})"
@@ -225,10 +234,7 @@ class MultiRoundSummaryDialog(QDialog):
 
     def _setup_multi_image_summary_table(self) -> None:
         """Populate summary PK table comparing mean values, range, and std across images."""
-        first_round = self.rounds_eval_map.get(1, {})
-        first_path = self.image_paths[0] if self.image_paths else ""
-        first_results = first_round.get(first_path, [])
-        metric_names = [r.metric_name for r in first_results]
+        metric_names = self._metric_names()
 
         cols = ["指标名称", "模式", "倾向"]
         for idx, p in enumerate(self.image_paths):
@@ -255,9 +261,9 @@ class MultiRoundSummaryDialog(QDialog):
 
             for p in self.image_paths:
                 scores_for_p: List[float] = []
-                for r_num in range(1, self.total_rounds + 1):
+                for r_num in self.round_numbers:
                     m_list = self.rounds_eval_map.get(r_num, {}).get(p, [])
-                    match = next((r for r in m_list if r.metric_name == m_name), None)
+                    match = next((r for r in m_list if r.metric_name == m_name and np.isfinite(r.score)), None)
                     if match:
                         scores_for_p.append(match.score)
                         if not sample_res:
@@ -276,49 +282,51 @@ class MultiRoundSummaryDialog(QDialog):
             self.table_multi_summary.setItem(row_idx, 2, QTableWidgetItem(dir_str))
 
             # Compute stats per image
-            means: List[float] = []
+            means: List[Optional[float]] = []
             ranges: List[float] = []
             stds: List[float] = []
 
             for img_idx, sc_list in enumerate(img_scores_list):
-                m_val = float(np.mean(sc_list)) if sc_list else 0.0
-                r_val = float(np.max(sc_list) - np.min(sc_list)) if sc_list else 0.0
-                s_val = float(np.std(sc_list, ddof=1)) if len(sc_list) > 1 else 0.0
+                m_val = float(np.mean(sc_list)) if sc_list else None
+                r_val = float(np.max(sc_list) - np.min(sc_list)) if sc_list else None
+                s_val = float(np.std(sc_list, ddof=1)) if len(sc_list) > 1 else None
                 means.append(m_val)
-                ranges.append(r_val)
-                stds.append(s_val)
+                if len(sc_list) > 1:
+                    ranges.append(r_val)
+                    stds.append(s_val)
 
                 base_col = 3 + img_idx * 3
-                item_m = QTableWidgetItem(f"{m_val:.4f}")
+                item_m = QTableWidgetItem(f"{m_val:.4f}" if m_val is not None else "N/A")
                 item_m.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item_m.setFont(QFont("", -1, QFont.Weight.Bold))
                 self.table_multi_summary.setItem(row_idx, base_col, item_m)
 
-                item_r = QTableWidgetItem(f"{r_val:.4f}")
+                item_r = QTableWidgetItem(f"{r_val:.4f}" if r_val is not None else "N/A")
                 item_r.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table_multi_summary.setItem(row_idx, base_col + 1, item_r)
 
-                item_s = QTableWidgetItem(f"{s_val:.4f}")
+                item_s = QTableWidgetItem(f"{s_val:.4f}" if s_val is not None else "N/A")
                 item_s.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table_multi_summary.setItem(row_idx, base_col + 2, item_s)
 
             # Determine best mean and worst mean
             best_idx: Optional[int] = None
             worst_idx: Optional[int] = None
-            if means:
+            valid_means = [(idx, value) for idx, value in enumerate(means) if value is not None]
+            if len(valid_means) >= 2:
                 if lower_better:
-                    best_m = min(means)
-                    worst_m = max(means)
+                    best_m = min(value for _, value in valid_means)
+                    worst_m = max(value for _, value in valid_means)
                 else:
-                    best_m = max(means)
-                    worst_m = min(means)
+                    best_m = max(value for _, value in valid_means)
+                    worst_m = min(value for _, value in valid_means)
 
-                best_tied = [i for i, m in enumerate(means) if abs(m - best_m) < 1e-5]
+                best_tied = [i for i, m in valid_means if abs(m - best_m) < 1e-5]
                 if len(best_tied) == 1:
                     best_idx = best_tied[0]
 
                 if num_imgs >= 3 and abs(best_m - worst_m) > 1e-5:
-                    worst_tied = [i for i, m in enumerate(means) if abs(m - worst_m) < 1e-5]
+                    worst_tied = [i for i, m in valid_means if abs(m - worst_m) < 1e-5]
                     if len(worst_tied) == 1:
                         worst_idx = worst_tied[0]
 
@@ -344,15 +352,18 @@ class MultiRoundSummaryDialog(QDialog):
                 item_w.setForeground(QColor(39, 174, 96))
                 item_w.setFont(QFont("", -1, QFont.Weight.Bold))
             else:
-                item_w = QTableWidgetItem("均值平局")
+                item_w = QTableWidgetItem("均值平局" if len(valid_means) >= 2 else "有效数据不足")
             item_w.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table_multi_summary.setItem(row_idx, col_winner, item_w)
 
             # Col: Stability Evaluation
             col_eval = col_winner + 1
             max_r = max(ranges) if ranges else 0.0
-            if max_r < 1e-5:
-                eval_text = "各图结果一致"
+            if len(ranges) < num_imgs:
+                eval_text = "有效轮次不足，无法判断各图稳定性"
+                eval_color = QColor(128, 128, 128)
+            elif max_r < 1e-5:
+                eval_text = "各图本次重复结果一致"
                 eval_color = QColor(16, 185, 129)
             elif max_r < 0.02:
                 eval_text = f"微幅数值扰动 (最大极差={max_r:.4f})"
@@ -369,10 +380,7 @@ class MultiRoundSummaryDialog(QDialog):
 
     def _setup_multi_image_details_table(self) -> None:
         """Populate detailed table listing every round's score for every image and metric."""
-        first_round = self.rounds_eval_map.get(1, {})
-        first_path = self.image_paths[0] if self.image_paths else ""
-        first_results = first_round.get(first_path, [])
-        metric_names = [r.metric_name for r in first_results]
+        metric_names = self._metric_names()
 
         cols = ["测试轮次", "指标名称", "模式", "倾向"]
         for idx, p in enumerate(self.image_paths):
@@ -387,7 +395,7 @@ class MultiRoundSummaryDialog(QDialog):
         self.table_multi_details.horizontalHeader().setStretchLastSection(True)
 
         current_row = 0
-        for r_num in range(1, self.total_rounds + 1):
+        for r_num in self.round_numbers:
             round_dict = self.rounds_eval_map.get(r_num, {})
             for m_name in metric_names:
                 # Gather scores this round across images
@@ -395,7 +403,7 @@ class MultiRoundSummaryDialog(QDialog):
                 sample_res: Optional[SingleEvalResult] = None
                 for p in self.image_paths:
                     m_list = round_dict.get(p, [])
-                    match = next((r for r in m_list if r.metric_name == m_name), None)
+                    match = next((r for r in m_list if r.metric_name == m_name and np.isfinite(r.score)), None)
                     if match:
                         scores_this_round.append(match.score)
                         if not sample_res:
@@ -404,7 +412,9 @@ class MultiRoundSummaryDialog(QDialog):
                         scores_this_round.append(None)
 
                 if not sample_res:
-                    continue
+                    sample_res = next((r for round_map in self.rounds_eval_map.values()
+                                       for path in self.image_paths for r in round_map.get(path, [])
+                                       if r.metric_name == m_name), None)
 
                 lower_better = sample_res.lower_better
 
@@ -416,7 +426,7 @@ class MultiRoundSummaryDialog(QDialog):
 
                 valid_scores = [(idx, s) for idx, s in enumerate(scores_this_round) if s is not None]
                 best_idx: Optional[int] = None
-                if valid_scores:
+                if len(valid_scores) >= 2:
                     if lower_better:
                         b_s = min(s for _, s in valid_scores)
                     else:
@@ -444,7 +454,7 @@ class MultiRoundSummaryDialog(QDialog):
                     w_item.setForeground(QColor(39, 174, 96))
                     w_item.setFont(QFont("", -1, QFont.Weight.Bold))
                 else:
-                    w_item = QTableWidgetItem("平局")
+                    w_item = QTableWidgetItem("平局" if len(valid_scores) >= 2 else "有效数据不足")
                 w_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table_multi_details.setItem(current_row, winner_col, w_item)
 
